@@ -14,9 +14,6 @@ COPY . .
 
 RUN mkdir -p /app/data
 
-# Gerar arquivos estáticos (embutidos em setup_static.py)
-RUN python setup_static.py && rm setup_static.py
-
 EXPOSE 8000
 
 CMD ["python", "main.py"]
