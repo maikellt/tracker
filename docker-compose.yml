@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  tracker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tracker
+    restart: unless-stopped
+    ports:
+      - "8086:8000"
+    volumes:
+      - /data/tracker:/app/data
+    environment:
+      - SCRAPE_TIME=06:00
+      - SCRAPE_INTERVAL_HOURS=24
+      - TZ=America/Sao_Paulo
+      - LOG_LEVEL=INFO
+      - HOST=0.0.0.0
+      - PORT=8000
+    networks:
+      - tracker-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  tracker-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16

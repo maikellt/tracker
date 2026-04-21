@@ -1,0 +1,30 @@
+# Banco de dados (volume Docker)
+/data/
+*.db
+*.db-journal
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Docker
+*.pid
+
+# OS
+.DS_Store
+Thumbs.db
