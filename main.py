@@ -4,6 +4,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Response
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from database import (
@@ -19,6 +21,7 @@ from database import (
     obter_snapshots_site,
     obter_max_site,
     verificar_alerta_sem_dados,
+    obter_ultima_coleta_site,
 )
 from scraper import coletar_site
 from agendador import iniciar_agendador, parar_agendador, reconfigurar_agendador, obter_config
@@ -33,7 +36,7 @@ async def lifespan(app: FastAPI):
     parar_agendador()
 
 
-app = FastAPI(title="CashbackTracker", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="CashbackTracker", version="3.0.0", lifespan=lifespan)
 
 
 def _disparar_coleta_inicial():
@@ -45,6 +48,18 @@ def _disparar_coleta_inicial():
             daemon=True,
         )
         t.start()
+
+
+# ── Dashboard ─────────────────────────────────────────────────────────────────
+
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+if os.path.isdir(STATIC_DIR):
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    @app.get("/", include_in_schema=False)
+    def dashboard():
+        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -76,6 +91,7 @@ def listar_sites():
     resultado = []
     for s in sites:
         alerta = verificar_alerta_sem_dados(s["id"]) if s["ativo"] else False
+        ultima_coleta = obter_ultima_coleta_site(s["id"])
         resultado.append({
             "id": s["id"],
             "nome": s["nome"],
@@ -83,6 +99,7 @@ def listar_sites():
             "categoria": s["categoria"],
             "ativo": bool(s["ativo"]),
             "alerta_sem_dados": alerta,
+            "ultima_coleta": ultima_coleta,
         })
     return resultado
 
@@ -94,7 +111,6 @@ def cadastrar_site(dados: SiteEntrada, response: Response):
     if existente:
         if existente["ativo"]:
             raise HTTPException(status_code=409, detail="Este site já está sendo monitorado")
-        # Reativar
         reativar_site(existente["id"], dados.nome, dados.categoria)
         site_id = existente["id"]
         response.status_code = 200
