@@ -5,7 +5,7 @@ Monitor de cashback e pontos/milhas do comparemania.com.br
 ## Status
 
 - [x] Fase 1 — Scraper + Armazenamento
-- [ ] Fase 2 — API REST + Agendador
+- [x] Fase 2 — API REST + Agendador
 - [ ] Fase 3 — Dashboard Web
 - [ ] Fase 4 — Notificações
 
@@ -21,40 +21,31 @@ docker-compose up -d
 
 ## Endpoints
 
-- Health:   `http://localhost:8086/health`
+| Método | Rota | Descrição |
+|--------|------|-----------|
+| GET | `/health` | Status da aplicação |
+| GET | `/sites` | Lista todos os sites |
+| POST | `/sites` | Cadastra ou reativa um site |
+| DELETE | `/sites/{id}` | Desativa um site |
+| GET | `/sites/{id}/parceiros` | Parceiros do site (ativo/inativo) |
+| GET | `/sites/{id}/snapshots` | Histórico de snapshots |
+| GET | `/sites/{id}/max` | Valor máximo no período |
+| GET | `/config` | Configuração do agendador |
+| PUT | `/config` | Atualiza configuração |
+
 - API Docs: `http://localhost:8086/docs`
 
-## Verificar logs
+## Agendador
 
-```bash
-docker-compose logs -f
-```
+- **Job fixo:** executa coleta no horário definido em `SCRAPE_TIME` (padrão `06:00` BRT)
+- **Job intervalo:** verifica a cada hora se algum site precisa de coleta com base em `SCRAPE_INTERVAL_HOURS` (padrão `24`)
+- **Regra de desempate:** coleta por intervalo é suprimida se o job fixo disparar em ≤30 min
 
-## Executar testes da Fase 1
-
-```bash
-chmod +x test_fase1.sh && ./test_fase1.sh
-```
-
-## Pré-requisito no host
-
-```bash
-mkdir -p /data/tracker && chmod 755 /data/tracker
-```
-
-## Estrutura
+## Formato de log
 
 ```
-tracker/
-├── main.py           # FastAPI app + startup
-├── scraper.py        # HTTP scraping + parsing + normalização
-├── database.py       # SQLite: criação e operações
-├── requirements.txt
-├── Dockerfile
-├── docker-compose.yml
-├── test_fase1.sh
-├── .gitignore
-└── README.md
+[YYYY-MM-DD HH:MM:SS] [SITE] [AÇÃO] mensagem
+[YYYY-MM-DD HH:MM:SS] [AGENDADOR] mensagem
 ```
 
 ## Banco de dados
@@ -63,15 +54,8 @@ SQLite em `/app/data/tracker.db` (mapeado para `/data/tracker/tracker.db` no hos
 
 Tabelas: `sites`, `snapshots`, `erros_scraping`.
 
-## Formato de log
+## Pré-requisito no host
 
-```
-[YYYY-MM-DD HH:MM:SS] [SITE] [AÇÃO] mensagem
-```
-
-Exemplo:
-```
-[2026-04-21 06:00:01] [Drogaria SP] [SCRAPING] Iniciando coleta
-[2026-04-21 06:00:03] [Drogaria SP] [PARCEIRO] Dotz → 3.0% cashback
-[2026-04-21 06:00:05] [Drogaria SP] [OK] 5 parceiros cashback, 1 pontos/milhas
+```bash
+mkdir -p /data/tracker && chmod 755 /data/tracker
 ```
