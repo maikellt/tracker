@@ -10,9 +10,12 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copia arquivos estáticos explicitamente (antes do COPY geral)
+COPY static/ /app/static/
+
 COPY . .
 
-RUN mkdir -p /app/data /app/static
+RUN mkdir -p /app/data
 
 EXPOSE 8000
 
