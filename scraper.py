@@ -69,13 +69,14 @@ def normalizar_valor(texto: str):
         '3% de cashback'  -> (3.0, '%')
         '1,50 pontos'     -> (1.5, 'pontos')
         '2 pts'           -> (2.0, 'pontos')
+        '1,00 pt(s)'      -> (1.0, 'pontos')
     """
     texto_lower = texto.lower()
 
-    # Inferir unidade
+    # Inferir unidade — 'pt(' cobre variantes como 'pt(s)'
     if "%" in texto_lower or "cashback" in texto_lower:
         unidade = "%"
-    elif "ponto" in texto_lower or "pts" in texto_lower or "milha" in texto_lower:
+    elif "ponto" in texto_lower or "pts" in texto_lower or "pt(" in texto_lower or "milha" in texto_lower:
         unidade = "pontos"
     else:
         unidade = None
