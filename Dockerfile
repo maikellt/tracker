@@ -10,6 +10,10 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Forçar invalidação de cache do COPY
+ARG CACHE_BUST=1
+RUN echo "Cache bust: $CACHE_BUST"
+
 COPY . .
 
 RUN mkdir -p /app/data
