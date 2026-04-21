@@ -20,8 +20,13 @@ _scheduler: BackgroundScheduler | None = None
 _lock = threading.Lock()
 
 
+def _agora_naive() -> datetime:
+    """Retorna datetime local sem timezone (consistente com o SQLite)."""
+    return datetime.now()
+
+
 def _log(mensagem: str):
-    agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    agora = _agora_naive().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{agora}] [AGENDADOR] {mensagem}", flush=True)
 
 
@@ -43,11 +48,11 @@ def _executar_coleta_por_intervalo():
     está além do intervalo configurado, respeitando a regra de desempate ±30min
     com o horário fixo.
     """
-    agora = datetime.now()
+    agora = _agora_naive()
     intervalo_horas = _config["scrape_interval_hours"]
     scrape_time = _config["scrape_time"]
 
-    # Calcula próximo disparo do job de horário fixo
+    # Próximo disparo do job de horário fixo (naive, horário local)
     hora, minuto = map(int, scrape_time.split(":"))
     proximo_fixo = agora.replace(hour=hora, minute=minuto, second=0, microsecond=0)
     if proximo_fixo <= agora:
@@ -55,23 +60,39 @@ def _executar_coleta_por_intervalo():
 
     margem = timedelta(minutes=30)
 
+    _log(f"Job intervalo verificando — intervalo={intervalo_horas}h, próximo fixo em {int((proximo_fixo - agora).total_seconds() / 60)}min")
+
     sites = obter_sites_ativos()
     for site in sites:
         ultimo = obter_ultimo_scraping_sucesso(site["id"])
+
         if ultimo is None:
-            continue  # nunca coletou — já foi disparado na inicialização
-
-        proximo_por_intervalo = ultimo + timedelta(hours=intervalo_horas)
-        if proximo_por_intervalo > agora:
-            continue  # ainda não é hora
-
-        # Regra de desempate: suprimir se coincide com job fixo dentro de ±30min
-        diff = abs((proximo_fixo - agora).total_seconds())
-        if diff <= margem.total_seconds():
-            _log(f"[{site['nome']}] Coleta por intervalo suprimida — próximo horário fixo em {int(diff/60)}min")
+            _log(f"[{site['nome']}] Sem coleta anterior — disparando agora")
+            threading.Thread(
+                target=coletar_site,
+                args=(site["id"], site["url"], site["nome"]),
+                daemon=True,
+            ).start()
             continue
 
-        _log(f"[{site['nome']}] Disparando coleta por intervalo")
+        # Garante datetime naive para comparação consistente
+        if ultimo.tzinfo is not None:
+            ultimo = ultimo.replace(tzinfo=None)
+
+        proximo_por_intervalo = ultimo + timedelta(hours=intervalo_horas)
+        minutos_restantes = int((proximo_por_intervalo - agora).total_seconds() / 60)
+
+        if proximo_por_intervalo > agora:
+            _log(f"[{site['nome']}] Próxima coleta em {minutos_restantes}min — aguardando")
+            continue
+
+        # Regra de desempate: suprimir se job fixo disparar em ≤30min
+        diff = abs((proximo_fixo - agora).total_seconds())
+        if diff <= margem.total_seconds():
+            _log(f"[{site['nome']}] Coleta suprimida — job fixo em {int(diff / 60)}min")
+            continue
+
+        _log(f"[{site['nome']}] Disparando coleta por intervalo (ultimo: {ultimo.strftime('%H:%M:%S')})")
         threading.Thread(
             target=coletar_site,
             args=(site["id"], site["url"], site["nome"]),
@@ -100,7 +121,6 @@ def parar_agendador():
 
 
 def _registrar_jobs():
-    """Registra os dois jobs no scheduler (deve ser chamado com lock ativo)."""
     hora, minuto = map(int, _config["scrape_time"].split(":"))
 
     # Job 1 — horário fixo diário
@@ -111,7 +131,7 @@ def _registrar_jobs():
         replace_existing=True,
     )
 
-    # Job 2 — verificação a cada hora se algum site precisa de coleta por intervalo
+    # Job 2 — verificação a cada hora
     _scheduler.add_job(
         _executar_coleta_por_intervalo,
         IntervalTrigger(hours=1),
@@ -123,7 +143,6 @@ def _registrar_jobs():
 
 
 def reconfigurar_agendador(novo_scrape_time: str | None, novo_intervalo_horas: int | None):
-    """Atualiza configuração e re-registra os jobs sem reiniciar o container."""
     with _lock:
         if novo_scrape_time:
             _config["scrape_time"] = novo_scrape_time
@@ -132,7 +151,7 @@ def reconfigurar_agendador(novo_scrape_time: str | None, novo_intervalo_horas: i
 
         if _scheduler and _scheduler.running:
             _registrar_jobs()
-            _log(f"Agendador reconfigurado — novo horário: {_config['scrape_time']}, intervalo: {_config['scrape_interval_hours']}h")
+            _log(f"Agendador reconfigurado — horário: {_config['scrape_time']}, intervalo: {_config['scrape_interval_hours']}h")
 
 
 def obter_config() -> dict:
