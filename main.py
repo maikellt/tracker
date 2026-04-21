@@ -2,10 +2,11 @@ import os
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from database import (
@@ -26,8 +27,14 @@ from database import (
 from scraper import coletar_site
 from agendador import iniciar_agendador, parar_agendador, reconfigurar_agendador, obter_config
 
-# Caminho absoluto — funciona dentro e fora do container
-STATIC_DIR = "/app/static"
+# Resolve o diretório static de duas formas, usa o que existir
+_BASE = Path(__file__).resolve().parent
+STATIC_DIR = _BASE / "static"
+if not STATIC_DIR.is_dir():
+    STATIC_DIR = Path("/app/static")
+
+ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+print(f"[{ts}] [STARTUP] STATIC_DIR = {STATIC_DIR} | existe = {STATIC_DIR.is_dir()}")
 
 
 @asynccontextmanager
@@ -41,9 +48,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="CashbackTracker", version="3.0.0", lifespan=lifespan)
 
-# Montar arquivos estáticos incondicionalmente
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
 
 def _disparar_coleta_inicial():
     sites = obter_sites_ativos()
@@ -56,11 +60,36 @@ def _disparar_coleta_inicial():
         t.start()
 
 
+# ── Diagnóstico (remover após confirmar) ─────────────────────────────────────
+
+@app.get("/debug-static", include_in_schema=False)
+def debug_static():
+    arquivos = []
+    if STATIC_DIR.is_dir():
+        arquivos = [str(p.name) for p in STATIC_DIR.iterdir()]
+    return JSONResponse({
+        "static_dir": str(STATIC_DIR),
+        "existe": STATIC_DIR.is_dir(),
+        "arquivos": arquivos,
+        "cwd": os.getcwd(),
+        "listdir_app": os.listdir("/app") if Path("/app").exists() else [],
+    })
+
+
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
-@app.get("/", include_in_schema=False)
-def dashboard():
-    return FileResponse(f"{STATIC_DIR}/index.html")
+if STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    ts2 = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ts2}] [STARTUP] StaticFiles montado em /static")
+
+    @app.get("/", include_in_schema=False)
+    def dashboard():
+        return FileResponse(str(STATIC_DIR / "index.html"))
+else:
+    @app.get("/", include_in_schema=False)
+    def dashboard_fallback():
+        return JSONResponse({"erro": f"static nao encontrado em {STATIC_DIR}"}, status_code=503)
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -108,7 +137,6 @@ def listar_sites():
 @app.post("/sites", status_code=201)
 def cadastrar_site(dados: SiteEntrada, response: Response):
     existente = obter_site_por_url(dados.url)
-
     if existente:
         if existente["ativo"]:
             raise HTTPException(status_code=409, detail="Este site já está sendo monitorado")
@@ -117,13 +145,7 @@ def cadastrar_site(dados: SiteEntrada, response: Response):
         response.status_code = 200
     else:
         site_id = inserir_site(dados.url, dados.nome, dados.categoria)
-
-    threading.Thread(
-        target=coletar_site,
-        args=(site_id, dados.url, dados.nome),
-        daemon=True,
-    ).start()
-
+    threading.Thread(target=coletar_site, args=(site_id, dados.url, dados.nome), daemon=True).start()
     return obter_site_por_id(site_id)
 
 
@@ -145,12 +167,7 @@ def parceiros_site(site_id: int):
 
 
 @app.get("/sites/{site_id}/snapshots")
-def snapshots_site(
-    site_id: int,
-    parceiro: str | None = None,
-    tipo: str | None = None,
-    dias: int = 30,
-):
+def snapshots_site(site_id: int, parceiro: str | None = None, tipo: str | None = None, dias: int = 30):
     site = obter_site_por_id(site_id)
     if not site:
         raise HTTPException(status_code=404, detail="Site não encontrado")
