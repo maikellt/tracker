@@ -321,14 +321,3 @@ def verificar_alerta_sem_dados(site_id: int) -> bool:
     ).fetchone()
     conn.close()
     return row[0] == 0
-
-
-def obter_ultima_coleta_site(site_id: int):
-    """Retorna o datetime ISO da ultima coleta (qualquer snapshot) do site."""
-    conn = conectar()
-    row = conn.execute(
-        "SELECT MAX(capturado_em) as ultima FROM snapshots WHERE site_id = ?",
-        (site_id,),
-    ).fetchone()
-    conn.close()
-    return row["ultima"] if row and row["ultima"] else None
