@@ -1,5 +1,5 @@
 #!/bin/bash
-# deploy.sh — Rebuild garantido usando código do GitHub
+# deploy.sh — Rebuild usando Dockerfile com main.py embutido em base64
 set -e
 
 WORK_DIR="/usr/local/src/tracker/tracker"
@@ -12,10 +12,9 @@ echo "=================================================="
 cd "$WORK_DIR"
 
 echo ""
-echo "[1/4] Atualizando Dockerfile e requirements via curl..."
-curl -fsSL "${RAW}/Dockerfile"       -o Dockerfile
-curl -fsSL "${RAW}/requirements.txt" -o requirements.txt
-echo "  ✓ Dockerfile e requirements atualizados"
+echo "[1/4] Baixando Dockerfile atualizado do GitHub..."
+curl -fsSL "${RAW}/Dockerfile" -o Dockerfile
+echo "  ✓ Dockerfile: $(wc -l < Dockerfile) linhas"
 
 echo ""
 echo "[2/4] Parando container e removendo imagem antiga..."
@@ -23,22 +22,21 @@ docker-compose down
 docker rmi tracker:latest 2>/dev/null && echo "  ✓ Imagem antiga removida" || echo "  (sem imagem anterior)"
 
 echo ""
-echo "[3/4] Build (o Dockerfile baixa o código do GitHub automaticamente)..."
-docker build --no-cache --build-arg CACHE_BUST=$(date +%s) -t tracker:latest .
+echo "[3/4] Build (main.py embutido no Dockerfile via base64)..."
+docker build --no-cache -t tracker:latest .
 
 echo ""
 echo "[4/4] Subindo container..."
 docker-compose up -d
-echo "Aguardando startup (25s)..."
-sleep 25
+echo "Aguardando startup (20s)..."
+sleep 20
 
 echo ""
-echo "=== Verificando o que está dentro do container ==="
-echo "Linhas no /app/main.py:"
+echo "=== Verificando main.py dentro do container ==="
+echo -n "Linhas: "
 docker exec tracker wc -l /app/main.py
-
-echo "Rotas registradas:"
-docker exec tracker grep -n "@app\.get\|@app\.post\|@app\.put\|@app\.delete" /app/main.py
+echo "Rotas:"
+docker exec tracker grep "@app\.get\|@app\.post\|@app\.put\|@app\.delete" /app/main.py
 
 echo ""
 echo "=== Testando endpoints ==="
@@ -48,8 +46,6 @@ for rota in "/" "/static/app.js" "/static/index.html" "/health" "/sites" "/confi
 done
 
 echo ""
-echo "=== Log de startup ==="
-docker logs tracker 2>&1 | grep -E "STARTUP|Rotas|Application startup" | tail -5
-
+docker logs tracker 2>&1 | grep -E "STARTUP|Rotas registradas|startup complete" | tail -3
 echo ""
-echo "Acesso: http://$(hostname -I | awk '{print $1}'):8086"
+echo "Dashboard: http://$(hostname -I | awk '{print $1}'):8086"
