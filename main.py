@@ -3,7 +3,8 @@ import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Response
+import uvicorn
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
@@ -227,6 +228,7 @@ _INDEX_HTML = """<!DOCTYPE html>
 <script src="/static/app.js"></script>
 </body>
 </html>"""
+
 
 _APP_JS = """const API = '';
 let todosOsSites = [];
@@ -632,17 +634,23 @@ document.addEventListener('DOMContentLoaded', inicializar);
 """
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    inicializar_banco()
-    iniciar_agendador()
-    _disparar_coleta_inicial()
-    yield
-    parar_agendador()
+# ── Modelos ───────────────────────────────────────────────────────────────────
+
+# ── Modelos ───────────────────────────────────────────────────────────────────
+
+class SiteEntrada(BaseModel):
+    url: str
+    nome: str
+    categoria: str
 
 
-app = FastAPI(title="CashbackTracker", version="3.0.0", lifespan=lifespan)
+class ConfigEntrada(BaseModel):
+    scrape_time: str | None = None
+    scrape_interval_hours: int | None = None
 
+
+
+# ── Helpers internos ──────────────────────────────────────────────────────────
 
 def _disparar_coleta_inicial():
     sites = obter_sites_ativos()
@@ -655,14 +663,32 @@ def _disparar_coleta_inicial():
         t.start()
 
 
-# ── Dashboard ─────────────────────────────────────────────────────────────────
+# ── Aplicação FastAPI ─────────────────────────────────────────────────────────
 
-@app.get("/", include_in_schema=False)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    inicializar_banco()
+    iniciar_agendador()
+    _disparar_coleta_inicial()
+    # Log das rotas registradas para diagnóstico
+    rotas = [r.path for r in app.routes if hasattr(r, "path")]
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ts}] [STARTUP] Rotas registradas: {rotas}", flush=True)
+    yield
+    parar_agendador()
+
+
+app = FastAPI(title="CashbackTracker", version="3.0.0", lifespan=lifespan)
+
+
+# ── Dashboard (estático embutido) ─────────────────────────────────────────────
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def dashboard():
     return HTMLResponse(content=_INDEX_HTML)
 
 
-@app.get("/static/index.html", include_in_schema=False)
+@app.get("/static/index.html", response_class=HTMLResponse, include_in_schema=False)
 def static_index():
     return HTMLResponse(content=_INDEX_HTML)
 
@@ -782,8 +808,9 @@ def atualizar_config(dados: ConfigEntrada):
     return obter_config()
 
 
+
+
 if __name__ == "__main__":
-    import uvicorn
     host = os.getenv("HOST", "0.0.0.0")
     porta = int(os.getenv("PORT", "8000"))
     uvicorn.run(app, host=host, port=porta, log_level="info")
