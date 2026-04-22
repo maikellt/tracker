@@ -1,68 +1,71 @@
 #!/bin/bash
-# deploy.sh — Sincronização forçada e rebuild completo do CashbackTracker
+# deploy.sh — Deploy direto via download do GitHub (ignora estado do git local)
 set -e
 
-REPO_DIR="/usr/local/src/tracker/tracker"
-CONTAINER="tracker"
+REPO="maikellt/tracker"
+BRANCH="main"
+WORK_DIR="/usr/local/src/tracker/tracker"
 BASE_URL="http://localhost:8086"
-ESPERADO_SHA=$(git -C "$REPO_DIR" ls-remote origin HEAD 2>/dev/null | cut -f1 | head -c 8)
+RAW="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
 
 echo "=================================================="
-echo " CashbackTracker — Deploy Fase 3"
+echo " CashbackTracker — Deploy Fase 3 (via download)"
 echo "=================================================="
 echo ""
 
-cd "$REPO_DIR"
+cd "$WORK_DIR"
 
-# 1. Verificar estado atual
-echo "[1/6] Estado atual do repositório local:"
-git log --oneline -3
-
-echo ""
-echo "[2/6] Sincronizando com GitHub (reset forçado)..."
-git fetch origin
-git reset --hard origin/main
-git clean -fd
-echo "✓ Código sincronizado. SHA atual: $(git rev-parse --short HEAD)"
+echo "[1/6] Baixando arquivos diretamente do GitHub..."
+for arquivo in main.py scraper.py database.py agendador.py requirements.txt Dockerfile docker-compose.yml .gitignore .dockerignore test_fase1.sh test_fase2.sh test_fase3.sh; do
+    curl -fsSL "${RAW}/${arquivo}" -o "${arquivo}" && echo "  ✓ ${arquivo}" || echo "  ✗ falhou: ${arquivo}"
+done
 
 echo ""
-echo "[3/6] Parando container atual..."
-docker-compose down || true
+echo "[2/6] SHA do main.py baixado (primeiros 80 chars):"
+head -c 80 main.py
+echo ""
+echo "Linhas no main.py: $(wc -l < main.py)"
 
 echo ""
-echo "[4/6] Construindo imagem (sem cache)..."
-docker build --no-cache --progress=plain -t tracker:latest . 2>&1 | grep -E "Step|COPY|transferring|Successfully|ERROR"
+echo "[3/6] Verificando rotas no main.py baixado:"
+grep -n '@app.get\|@app.post\|@app.put\|@app.delete' main.py | head -20
 
 echo ""
-echo "[5/6] Subindo container..."
+echo "[4/6] Parando e removendo container..."
+docker-compose down
+docker rmi tracker:latest 2>/dev/null || true
+
+echo ""
+echo "[5/6] Build da imagem (sem cache, sem imagem anterior)..."
+docker build --no-cache --progress=plain -t tracker:latest . 2>&1 | tail -5
+
+echo ""
+echo "[6/6] Subindo container..."
 docker-compose up -d
-echo "Aguardando startup (20s)..."
-sleep 20
+echo "Aguardando startup (25s)..."
+sleep 25
 
 echo ""
-echo "[6/6] Validando rotas..."
-check() {
-    local rota=$1
-    local code=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL$rota")
-    if [ "$code" = "200" ]; then
-        echo "  ✓ $rota → HTTP $code"
-    else
-        echo "  ✗ $rota → HTTP $code  ← FALHOU"
-    fi
-}
-
-check "/"
-check "/static/app.js"
-check "/static/index.html"
-check "/health"
-check "/sites"
-check "/config"
+echo "=== Verificação de rotas ==="
+for rota in "/" "/static/app.js" "/static/index.html" "/health" "/sites" "/config"; do
+    code=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:8086${rota}")
+    [ "$code" = "200" ] && echo "  ✓ ${rota} → HTTP ${code}" || echo "  ✗ ${rota} → HTTP ${code} ← FALHOU"
+done
 
 echo ""
-echo "Últimas linhas do log (procurando [STARTUP]):"
-docker logs $CONTAINER --tail 15 2>&1 | grep -E "STARTUP|Rotas|ERROR|error|rotas" || docker logs $CONTAINER --tail 10
+echo "=== Log de startup ==="
+docker logs tracker 2>&1 | grep -E "STARTUP|Rotas|started|Uvicorn" | tail -5
 
 echo ""
-echo "=================================================="
-echo " Acesso: http://$(hostname -I | awk '{print $1}'):8086"
-echo "=================================================="
+echo "=== Linha uvicorn.run no main.py em uso ==="
+docker exec tracker grep -n "uvicorn.run" /app/main.py
+
+echo ""
+echo "=== Rotas registradas no processo ==="
+docker exec tracker python3 -c "
+from main import app
+print([r.path for r in app.routes if hasattr(r, 'path')])
+" 2>&1
+
+echo ""
+echo "Acesso: http://$(hostname -I | awk '{print \$1}'):8086"
