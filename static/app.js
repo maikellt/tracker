@@ -8,8 +8,8 @@ let graficoInstance = null;
 function formatarData(iso) {
   if (!iso) return '—';
   try {
-    const d = new Date(iso.includes('T') ? iso : iso + 'T00:00:00');
-    return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const d = new Date(iso.replace(" ", "T") + "Z");
+    return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
   } catch { return iso; }
 }
 
@@ -58,7 +58,8 @@ async function inicializar() {
 }
 
 async function inicializarPainel() {
-  await Promise.all([carregarSitesBase(), carregarTodosParceiros()]);
+  await carregarSitesBase();
+  await carregarTodosParceiros();
   aplicarFiltros();
   carregarGrafico();
   renderizarAlertas();
@@ -204,12 +205,12 @@ function agregarPorDia(snapCash, snapPts, dias) {
   const mapCash = {}, mapPts = {};
   snapCash.forEach(s => {
     if (s.percentual === null) return;
-    const dia = (s.capturado_em.split('T')[0] || s.capturado_em.split(' ')[0]);
+    const dia = (s.capturado_em.slice(0, 10));
     if (!mapCash[dia] || s.percentual > mapCash[dia]) mapCash[dia] = s.percentual;
   });
   snapPts.forEach(s => {
     if (s.percentual === null) return;
-    const dia = (s.capturado_em.split('T')[0] || s.capturado_em.split(' ')[0]);
+    const dia = (s.capturado_em.slice(0, 10));
     if (!mapPts[dia] || s.percentual > mapPts[dia]) mapPts[dia] = s.percentual;
   });
   const labels = [], dataCash = [], dataPts = [];
