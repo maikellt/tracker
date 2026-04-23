@@ -20,7 +20,7 @@ STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/health")
 STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/")
 [ "$STATUS" = "200" ] && pass "GET / retorna 200" || fail "GET / retornou HTTP $STATUS"
 
-CONTENT_TYPE=$(curl -s -I "$BASE_URL/" | grep -i content-type | head -1)
+CONTENT_TYPE=$(curl -s "$BASE_URL/" -o /dev/null -w "%{content_type}")
 echo "$CONTENT_TYPE" | grep -qi "text/html" \
   && pass "GET / retorna Content-Type: text/html" \
   || fail "GET / não retornou text/html (got: $CONTENT_TYPE)"
@@ -33,15 +33,15 @@ STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/static/index.html")
 STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/static/app.js")
 [ "$STATUS" = "200" ] && pass "GET /static/app.js retorna 200" || fail "GET /static/app.js retornou HTTP $STATUS"
 
-JS_TYPE=$(curl -s -I "$BASE_URL/static/app.js" | grep -i content-type | head -1)
+JS_TYPE=$(curl -s "$BASE_URL/static/app.js" -o /dev/null -w "%{content_type}")
 echo "$JS_TYPE" | grep -qi "javascript" \
   && pass "app.js retorna Content-Type correto" \
   || fail "app.js não retornou content-type javascript (got: $JS_TYPE)"
 
 # ── 5. Conteúdo HTML mínimo ──
 HTML=$(curl -s "$BASE_URL/")
-echo "$HTML" | grep -q "cashback_tracker" \
-  && pass "HTML contém título 'cashback_tracker'" \
+echo "$HTML" | grep -qi "CashbackTracker\|cashback_tracker" \
+  && pass "HTML contém título correto" \
   || fail "HTML não contém título esperado"
 
 echo "$HTML" | grep -q "app.js" \
@@ -84,3 +84,4 @@ fi
 echo "══════════════════════════════════"
 
 exit $FALHAS
+

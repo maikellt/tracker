@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from database import (
@@ -33,7 +34,7 @@ async def lifespan(app: FastAPI):
     parar_agendador()
 
 
-app = FastAPI(title="CashbackTracker", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="CashbackTracker", version="3.0.0", lifespan=lifespan)
 
 
 def _disparar_coleta_inicial():
@@ -53,6 +54,23 @@ def _disparar_coleta_inicial():
 def health():
     agora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {"status": "ok", "timestamp": agora}
+
+
+# ── Dashboard ─────────────────────────────────────────────────────────────────
+
+@app.get("/", response_class=FileResponse, include_in_schema=False)
+async def dashboard():
+    return FileResponse("/app/static/index.html", media_type="text/html")
+
+
+@app.get("/static/index.html", response_class=FileResponse, include_in_schema=False)
+async def dashboard_direto():
+    return FileResponse("/app/static/index.html", media_type="text/html")
+
+
+@app.get("/static/app.js", include_in_schema=False)
+async def dashboard_js():
+    return FileResponse("/app/static/app.js", media_type="application/javascript")
 
 
 # ── Modelos ───────────────────────────────────────────────────────────────────
@@ -94,7 +112,6 @@ def cadastrar_site(dados: SiteEntrada, response: Response):
     if existente:
         if existente["ativo"]:
             raise HTTPException(status_code=409, detail="Este site já está sendo monitorado")
-        # Reativar
         reativar_site(existente["id"], dados.nome, dados.categoria)
         site_id = existente["id"]
         response.status_code = 200
@@ -173,3 +190,4 @@ if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
     porta = int(os.getenv("PORT", "8000"))
     uvicorn.run("main:app", host=host, port=porta, log_level="info")
+
