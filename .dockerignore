@@ -1,6 +1,29 @@
-.git
-__pycache__
+# Banco de dados (volume Docker — não entra na imagem)
+/data/
+*.db
+*.db-journal
+
+# Cache Python — apenas bytecode compilado, NÃO os .py em si
+__pycache__/
 *.pyc
 *.pyo
-.env
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
 *.log
+
+# Docker
+*.pid
+
+# Git
+.git/
+.gitignore
