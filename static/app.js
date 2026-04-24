@@ -193,42 +193,43 @@ function atualizarSummary(lista) {
 }
 
 async function carregarGrafico() {
+  const tipoFiltro = document.getElementById('filtro-tipo').value;
   const siteId = document.getElementById('filtro-site').value;
   const dias   = Number(document.getElementById('grafico-dias').value || 30);
   if (siteId) {
-    await carregarGraficoUmSite(siteId, dias);
+    await carregarGraficoUmSite(siteId, dias, tipoFiltro);
   } else {
-    await carregarGraficoTodosSites(dias);
+    await carregarGraficoTodosSites(dias, tipoFiltro);
   }
 }
 
-async function carregarGraficoUmSite(siteId, dias) {
+async function carregarGraficoUmSite(siteId, dias, tipo) {
   try {
-    const [resCash, resPts] = await Promise.all([
-      fetch(`${API}/sites/${siteId}/snapshots?tipo=cashback&dias=${dias}`),
-      fetch(`${API}/sites/${siteId}/snapshots?tipo=pontos_milhas&dias=${dias}`),
-    ]);
-    const snapCash = await resCash.json();
-    const snapPts  = await resPts.json();
-    const labels   = gerarLabels(dias);
-    const dataCash = agregarMaxPorDia(snapCash, labels);
-    const dataPts  = agregarMaxPorDia(snapPts, labels);
-    const site     = todosOsSites.find(s => String(s.id) === String(siteId));
-    const datasets = [
-      fazerDataset(`Cashback — ${site?.nome || ''}`, dataCash, CORES_SITES[0], 'y'),
-      fazerDataset(`Pontos/Milhas — ${site?.nome || ''}`, dataPts, CORES_SITES[1], 'y2'),
-    ];
-    renderizarGrafico(labels.map(l => l.slice(5)), datasets, true);
+    const labels  = gerarLabels(dias);
+    const site    = todosOsSites.find(s => String(s.id) === String(siteId));
+    const datasets = [];
+    const mostraCashback = !tipo || tipo === 'cashback';
+    const mostraPontos   = !tipo || tipo === 'pontos_milhas';
+    if (mostraCashback) {
+      const snap = await fetch(`${API}/sites/${siteId}/snapshots?tipo=cashback&dias=${dias}`).then(r => r.json());
+      datasets.push(fazerDataset(`Cashback — ${site?.nome || ''}`, agregarMaxPorDia(snap, labels), CORES_SITES[0], 'y'));
+    }
+    if (mostraPontos) {
+      const snap = await fetch(`${API}/sites/${siteId}/snapshots?tipo=pontos_milhas&dias=${dias}`).then(r => r.json());
+      datasets.push(fazerDataset(`Pontos/Milhas — ${site?.nome || ''}`, agregarMaxPorDia(snap, labels), CORES_SITES[1], mostraCashback ? 'y2' : 'y'));
+    }
+    renderizarGrafico(labels.map(l => l.slice(5)), datasets, mostraCashback && mostraPontos);
   } catch (e) { console.error('Erro no gráfico:', e); }
 }
 
-async function carregarGraficoTodosSites(dias) {
+async function carregarGraficoTodosSites(dias, tipo) {
   const sites = todosOsSites.filter(s => s.ativo);
   if (!sites.length) { limparGrafico(); return; }
   try {
+    const tipoQuery = (tipo === 'pontos_milhas') ? 'pontos_milhas' : 'cashback';
     const snapsPorSite = await Promise.all(
       sites.map(s =>
-        fetch(`${API}/sites/${s.id}/snapshots?tipo=cashback&dias=${dias}`)
+        fetch(`${API}/sites/${s.id}/snapshots?tipo=${tipoQuery}&dias=${dias}`)
           .then(r => r.json())
           .then(snaps => ({ site: s, snaps }))
           .catch(() => ({ site: s, snaps: [] }))
