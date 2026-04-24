@@ -2,6 +2,20 @@ const API = '';
 let todosOsSites = [];
 let todosParceiros = [];
 let acessoMap = {};
+
+async function carregarAcessoLocal() {
+  try {
+    const res = await fetch(`${API}/preferencias`);
+    acessoMap = await res.json();
+  } catch { acessoMap = {}; }
+}
+function salvarAcessoLocal() {
+  fetch(`${API}/preferencias`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(acessoMap),
+  }).catch(() => {});
+}
 let configAtual = {};
 let graficoInstance = null;
 
@@ -59,10 +73,11 @@ function mudarAba(aba) {
   btn.setAttribute('aria-selected', 'true');
   if (aba === 'painel') inicializarPainel();
   if (aba === 'sites')  carregarSites();
-  if (aba === 'config') carregarConfig();
+  if (aba === 'config') { carregarConfig(); renderizarAcessos(); }
 }
 
 async function inicializar() {
+  await carregarAcessoLocal();
   await inicializarPainel();
 }
 
@@ -136,7 +151,7 @@ function aplicarFiltros() {
   if (siteId)       lista = lista.filter(p => String(p.site_id) === siteId);
   if (categoria)    lista = lista.filter(p => p.site_categoria === categoria);
   if (tipo)         lista = lista.filter(p => p.tipo === tipo);
-  if (apenasAcesso) lista = lista.filter(p => acessoMap[`${p.site_id}|${p.parceiro}`]);
+  if (apenasAcesso) lista = lista.filter(p => acessoMap[p.parceiro]);
   renderizarTabelaParceiros(lista);
   atualizarSummary(lista);
   carregarGrafico();
@@ -151,7 +166,7 @@ function renderizarTabelaParceiros(lista) {
   empty.style.display = 'none';
   contador.textContent = `${lista.length} parceiro${lista.length !== 1 ? 's' : ''}`;
   lista.forEach(p => {
-    const chave = `${p.site_id}|${p.parceiro}`;
+    const chave = p.parceiro;
     const temAcesso = !!acessoMap[chave];
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -366,6 +381,48 @@ function renderizarGrafico(labelsX, datasets, comEixoY2) {
 
 function limparGrafico() {
   if (graficoInstance) { graficoInstance.destroy(); graficoInstance = null; }
+}
+
+async function renderizarAcessos() {
+  const tbody = document.getElementById('tabela-acessos');
+  const empty = document.getElementById('empty-acessos');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  const vistos = new Set();
+  const unicos = todosParceiros
+    .map(p => ({ chave: p.parceiro, parceiro: p.parceiro, site: p.site_nome, tipo: p.tipo, valor: p.ultimo_valor, unidade: p.unidade }))
+    .filter(i => { if (vistos.has(i.chave)) return false; vistos.add(i.chave); return true; })
+    .sort((a, b) => a.parceiro.localeCompare(b.parceiro, 'pt-BR'));
+  if (!unicos.length) { if (empty) empty.style.display = 'block'; return; }
+  if (empty) empty.style.display = 'none';
+
+  const grupos = [
+    { tipo: 'cashback',      label: 'Cashback',       itens: unicos.filter(i => i.tipo === 'cashback') },
+    { tipo: 'pontos_milhas', label: 'Pontos/Milhas',  itens: unicos.filter(i => i.tipo === 'pontos_milhas') },
+  ];
+
+  grupos.forEach(({ label, itens }) => {
+    if (!itens.length) return;
+    // Linha de cabeçalho do grupo
+    const trHead = document.createElement('tr');
+    trHead.innerHTML = `<td colspan="5" style="background:var(--surface2);color:var(--muted);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;padding:8px 12px;">${label}</td>`;
+    tbody.appendChild(trHead);
+    // Linhas dos parceiros
+    itens.forEach(item => {
+      const temAcesso = !!acessoMap[item.chave];
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><strong>${item.parceiro}</strong></td>
+        <td><label class="toggle-acesso"><input type="checkbox" id="acesso-cfg-${item.chave}" ${temAcesso ? 'checked' : ''} onchange="toggleAcessoCfg('${item.chave}', this.checked)" /> tenho acesso</label></td>`;
+      tbody.appendChild(tr);
+    });
+  });
+}
+
+function toggleAcessoCfg(chave, valor) {
+  acessoMap[chave] = valor;
+  salvarAcessoLocal();
+  if (document.getElementById('filtro-acesso')?.checked) aplicarFiltros();
 }
 
 async function carregarSites() {

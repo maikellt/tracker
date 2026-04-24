@@ -183,6 +183,19 @@
       <div class="card-header"><h2>Informações do sistema</h2></div>
       <div class="card-body" id="info-sistema" style="font-size:13px;color:var(--muted);display:flex;flex-direction:column;gap:8px;"><div>Carregando...</div></div>
     </div>
+    <div class="card">
+      <div class="card-header">
+        <h2>Meus Acessos</h2>
+        <span style="font-size:12px;color:var(--muted)">Marque os parceiros que você tem acesso — aplicado automaticamente no Painel</span>
+      </div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr><th>Parceiro</th><th>Tenho acesso</th></tr></thead>
+          <tbody id="tabela-acessos"></tbody>
+        </table>
+      </div>
+      <div id="empty-acessos" class="empty" style="display:none">Nenhum parceiro detectado ainda. Aguarde a próxima coleta.</div>
+    </div>
   </section>
 </main>
 <dialog id="modal-confirmacao" aria-modal="true" aria-labelledby="modal-titulo">

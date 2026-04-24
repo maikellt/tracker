@@ -185,6 +185,27 @@ def atualizar_config(dados: ConfigEntrada):
     return obter_config()
 
 
+
+
+# ── Preferências ──────────────────────────────────────────────────────────────
+
+PREFS_PATH = "/app/data/preferencias.json"
+
+@app.get("/preferencias")
+def ler_preferencias():
+    import json
+    if not os.path.exists(PREFS_PATH):
+        return {}
+    with open(PREFS_PATH, "r") as f:
+        return json.load(f)
+
+@app.put("/preferencias")
+def salvar_preferencias(dados: dict):
+    import json
+    with open(PREFS_PATH, "w") as f:
+        json.dump(dados, f)
+    return dados
+
 if __name__ == "__main__":
     import uvicorn
     host = os.getenv("HOST", "0.0.0.0")
