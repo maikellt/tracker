@@ -5,10 +5,19 @@ let acessoMap = {};
 let configAtual = {};
 let graficoInstance = null;
 
+const CORES_SITES = [
+  { border: '#3fb950', bg: 'rgba(63,185,80,.12)'   },
+  { border: '#58a6ff', bg: 'rgba(88,166,255,.12)'  },
+  { border: '#f78166', bg: 'rgba(247,129,102,.12)' },
+  { border: '#d2a8ff', bg: 'rgba(210,168,255,.12)' },
+  { border: '#ffa657', bg: 'rgba(255,166,87,.12)'  },
+  { border: '#79c0ff', bg: 'rgba(121,192,255,.12)' },
+];
+
 function formatarData(iso) {
   if (!iso) return '—';
   try {
-    const d = new Date(iso.replace(" ", "T") + "Z");
+    const d = new Date(iso.replace(' ', 'T') + 'Z');
     return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
   } catch { return iso; }
 }
@@ -61,7 +70,7 @@ async function inicializarPainel() {
   await carregarSitesBase();
   await carregarTodosParceiros();
   aplicarFiltros();
-  carregarGrafico();
+  await carregarGrafico();
   renderizarAlertas();
 }
 
@@ -81,18 +90,16 @@ async function carregarSitesBase() {
   try {
     const res = await fetch(`${API}/sites`);
     todosOsSites = await res.json();
-    ['filtro-site', 'grafico-site'].forEach(id => {
-      const sel = document.getElementById(id);
-      const val = sel.value;
-      sel.innerHTML = id === 'filtro-site' ? '<option value="">Todos</option>' : '';
-      todosOsSites.forEach(s => {
-        const opt = document.createElement('option');
-        opt.value = s.id;
-        opt.textContent = s.nome;
-        sel.appendChild(opt);
-      });
-      if (val) sel.value = val;
+    const sel = document.getElementById('filtro-site');
+    const val = sel.value;
+    sel.innerHTML = '<option value="">Todos</option>';
+    todosOsSites.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      opt.textContent = s.nome;
+      sel.appendChild(opt);
     });
+    if (val) sel.value = val;
     const cats = [...new Set(todosOsSites.map(s => s.categoria))];
     const dl = document.getElementById('sugestoes-categoria');
     if (dl) { dl.innerHTML = ''; cats.forEach(c => { const o = document.createElement('option'); o.value = c; dl.appendChild(o); }); }
@@ -132,6 +139,7 @@ function aplicarFiltros() {
   if (apenasAcesso) lista = lista.filter(p => acessoMap[`${p.site_id}|${p.parceiro}`]);
   renderizarTabelaParceiros(lista);
   atualizarSummary(lista);
+  carregarGrafico();
 }
 
 function renderizarTabelaParceiros(lista) {
@@ -185,9 +193,16 @@ function atualizarSummary(lista) {
 }
 
 async function carregarGrafico() {
-  const siteId = document.getElementById('grafico-site').value;
-  const dias   = document.getElementById('grafico-dias').value || 30;
-  if (!siteId) { limparGrafico(); return; }
+  const siteId = document.getElementById('filtro-site').value;
+  const dias   = Number(document.getElementById('grafico-dias').value || 30);
+  if (siteId) {
+    await carregarGraficoUmSite(siteId, dias);
+  } else {
+    await carregarGraficoTodosSites(dias);
+  }
+}
+
+async function carregarGraficoUmSite(siteId, dias) {
   try {
     const [resCash, resPts] = await Promise.all([
       fetch(`${API}/sites/${siteId}/snapshots?tipo=cashback&dias=${dias}`),
@@ -195,71 +210,131 @@ async function carregarGrafico() {
     ]);
     const snapCash = await resCash.json();
     const snapPts  = await resPts.json();
-    const { labels, dataCash, dataPts } = agregarPorDia(snapCash, snapPts, Number(dias));
-    renderizarGrafico(labels, dataCash, dataPts);
+    const labels   = gerarLabels(dias);
+    const dataCash = agregarMaxPorDia(snapCash, labels);
+    const dataPts  = agregarMaxPorDia(snapPts, labels);
+    const site     = todosOsSites.find(s => String(s.id) === String(siteId));
+    const datasets = [
+      fazerDataset(`Cashback — ${site?.nome || ''}`, dataCash, CORES_SITES[0], 'y'),
+      fazerDataset(`Pontos/Milhas — ${site?.nome || ''}`, dataPts, CORES_SITES[1], 'y2'),
+    ];
+    renderizarGrafico(labels.map(l => l.slice(5)), datasets, true);
   } catch (e) { console.error('Erro no gráfico:', e); }
 }
 
-function agregarPorDia(snapCash, snapPts, dias) {
+async function carregarGraficoTodosSites(dias) {
+  const sites = todosOsSites.filter(s => s.ativo);
+  if (!sites.length) { limparGrafico(); return; }
+  try {
+    const snapsPorSite = await Promise.all(
+      sites.map(s =>
+        fetch(`${API}/sites/${s.id}/snapshots?tipo=cashback&dias=${dias}`)
+          .then(r => r.json())
+          .then(snaps => ({ site: s, snaps }))
+          .catch(() => ({ site: s, snaps: [] }))
+      )
+    );
+    const labels  = gerarLabels(dias);
+    const labelsX = labels.map(l => l.slice(5));
+    const datasets = snapsPorSite.map(({ site, snaps }, idx) => {
+      const cor  = CORES_SITES[idx % CORES_SITES.length];
+      const data = agregarMaxPorDia(snaps, labels);
+      return fazerDataset(`Cashback — ${site.nome}`, data, cor, 'y');
+    });
+    if (sites.length > 1) {
+      const maiorPorDia = labels.map((_, i) => {
+        const vals = datasets.map(ds => ds.data[i]).filter(v => v !== null);
+        return vals.length ? Math.max(...vals) : null;
+      });
+      datasets.push({
+        label: '★ Maior do dia',
+        data: maiorPorDia,
+        borderColor: '#f0e040',
+        backgroundColor: 'rgba(240,224,64,.06)',
+        borderWidth: 2,
+        borderDash: [5, 3],
+        pointRadius: maiorPorDia.map(v => v !== null ? 3 : 0),
+        pointHoverRadius: 5,
+        pointBackgroundColor: '#f0e040',
+        pointBorderColor: '#f0e040',
+        spanGaps: false,
+        tension: 0.3,
+        yAxisID: 'y',
+        fill: false,
+      });
+    }
+    renderizarGrafico(labelsX, datasets, false);
+  } catch (e) { console.error('Erro no gráfico todos os sites:', e); }
+}
+
+function gerarLabels(dias) {
   const hoje = new Date();
-  const mapCash = {}, mapPts = {};
-  snapCash.forEach(s => {
-    if (s.percentual === null) return;
-    const dia = (s.capturado_em.slice(0, 10));
-    if (!mapCash[dia] || s.percentual > mapCash[dia]) mapCash[dia] = s.percentual;
-  });
-  snapPts.forEach(s => {
-    if (s.percentual === null) return;
-    const dia = (s.capturado_em.slice(0, 10));
-    if (!mapPts[dia] || s.percentual > mapPts[dia]) mapPts[dia] = s.percentual;
-  });
-  const labels = [], dataCash = [], dataPts = [];
+  const labels = [];
   for (let i = dias - 1; i >= 0; i--) {
     const d = new Date(hoje);
     d.setDate(d.getDate() - i);
-    const iso = d.toISOString().split('T')[0];
-    labels.push(iso.slice(5));
-    dataCash.push(mapCash[iso] !== undefined ? mapCash[iso] : null);
-    dataPts.push(mapPts[iso]   !== undefined ? mapPts[iso]  : null);
+    labels.push(d.toISOString().split('T')[0]);
   }
-  return { labels, dataCash, dataPts };
+  return labels;
 }
 
-function renderizarGrafico(labels, dataCash, dataPts) {
+function agregarMaxPorDia(snaps, labels) {
+  const mapa = {};
+  snaps.forEach(s => {
+    if (s.percentual === null) return;
+    const dia = s.capturado_em.slice(0, 10);
+    if (mapa[dia] === undefined || s.percentual > mapa[dia]) mapa[dia] = s.percentual;
+  });
+  return labels.map(l => mapa[l] !== undefined ? mapa[l] : null);
+}
+
+function fazerDataset(label, data, cor, yAxisID) {
+  const maxIdx = data.reduce(
+    (iMax, v, i, arr) => (v !== null && (arr[iMax] === null || v > arr[iMax]) ? i : iMax), 0
+  );
+  return {
+    label, data,
+    borderColor: cor.border, backgroundColor: cor.bg,
+    borderWidth: 2,
+    pointRadius: data.map((v, i) => v !== null ? (i === maxIdx ? 6 : 3) : 0),
+    pointHoverRadius: 5,
+    pointBackgroundColor: data.map((v, i) => i === maxIdx ? cor.border : 'transparent'),
+    pointBorderColor: cor.border,
+    spanGaps: false, tension: 0.3, yAxisID, fill: true,
+  };
+}
+
+function renderizarGrafico(labelsX, datasets, comEixoY2) {
   const ctx = document.getElementById('grafico-historico').getContext('2d');
   if (graficoInstance) { graficoInstance.destroy(); graficoInstance = null; }
-  const maxCashIdx = dataCash.reduce((iMax, v, i, arr) => (v !== null && (arr[iMax] === null || v > arr[iMax]) ? i : iMax), 0);
-  const maxPtsIdx  = dataPts.reduce((iMax, v, i, arr)  => (v !== null && (arr[iMax] === null || v > arr[iMax]) ? i : iMax), 0);
+  const scales = {
+    x:  { ticks: { color: '#8b949e', maxTicksLimit: 10, font: { size: 11 } }, grid: { color: '#21262d' } },
+    y:  { position: 'left',  ticks: { color: '#8b949e', font: { size: 11 }, callback: v => `${v}%` }, grid: { color: '#21262d' }, beginAtZero: true },
+  };
+  if (comEixoY2) {
+    scales.y2 = { position: 'right', ticks: { color: '#58a6ff', font: { size: 11 }, callback: v => `${v} pts` }, grid: { drawOnChartArea: false }, beginAtZero: true };
+  }
   graficoInstance = new Chart(ctx, {
     type: 'line',
-    data: {
-      labels,
-      datasets: [
-        { label: 'Cashback (%)', data: dataCash, borderColor: '#3fb950', backgroundColor: 'rgba(63,185,80,.12)', pointRadius: dataCash.map((v,i) => v!==null?(i===maxCashIdx?6:3):0), pointHoverRadius: 5, pointBackgroundColor: dataCash.map((v,i) => i===maxCashIdx?'#3fb950':'transparent'), pointBorderColor: '#3fb950', spanGaps: false, tension: 0.3, yAxisID: 'y', fill: true },
-        { label: 'Pontos/Milhas', data: dataPts, borderColor: '#58a6ff', backgroundColor: 'rgba(88,166,255,.08)', pointRadius: dataPts.map((v,i) => v!==null?(i===maxPtsIdx?6:3):0), pointHoverRadius: 5, pointBackgroundColor: dataPts.map((v,i) => i===maxPtsIdx?'#58a6ff':'transparent'), pointBorderColor: '#58a6ff', spanGaps: false, tension: 0.3, yAxisID: 'y2', fill: true },
-      ],
-    },
+    data: { labels: labelsX, datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: { labels: { color: '#8b949e', boxWidth: 12, font: { size: 12 } } },
         tooltip: {
-          backgroundColor: '#161b22', borderColor: '#30363d', borderWidth: 1, titleColor: '#e6edf3', bodyColor: '#8b949e',
+          backgroundColor: '#161b22', borderColor: '#30363d', borderWidth: 1,
+          titleColor: '#e6edf3', bodyColor: '#8b949e',
           callbacks: {
             label(ctx) {
               if (ctx.parsed.y === null) return `${ctx.dataset.label}: sem dados`;
-              const u = ctx.datasetIndex === 0 ? '%' : ' pts';
+              const u = ctx.dataset.yAxisID === 'y2' ? ' pts' : '%';
               return `${ctx.dataset.label}: ${ctx.parsed.y.toLocaleString('pt-BR', { minimumFractionDigits: 1 })}${u}`;
             },
           },
         },
       },
-      scales: {
-        x:  { ticks: { color: '#8b949e', maxTicksLimit: 10, font: { size: 11 } }, grid: { color: '#21262d' } },
-        y:  { position: 'left',  ticks: { color: '#3fb950', font: { size: 11 }, callback: v => `${v}%` },     grid: { color: '#21262d' }, beginAtZero: true },
-        y2: { position: 'right', ticks: { color: '#58a6ff', font: { size: 11 }, callback: v => `${v} pts` }, grid: { drawOnChartArea: false }, beginAtZero: true },
-      },
+      scales,
     },
   });
 }
@@ -290,9 +365,9 @@ function renderizarTabelaSites() {
     if (!s.ativo) tr.classList.add('inativo');
     const statusBadge = s.ativo ? '<span class="badge badge-green">● ativo</span>' : '<span class="badge badge-gray">○ inativo</span>';
     const alertaCell  = s.alerta_sem_dados ? '<span title="Nenhum valor coletado nos últimos 2 dias">⚠️</span>' : '';
-    const url    = (s.url || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    const nome   = (s.nome || '').replace(/'/g, "\\'");
-    const cat    = (s.categoria || '').replace(/'/g, "\\'");
+    const url  = (s.url  || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const nome = (s.nome || '').replace(/'/g, "\\'");
+    const cat  = (s.categoria || '').replace(/'/g, "\\'");
     const acaoBotao = s.ativo
       ? `<button class="btn btn-danger btn-sm" onclick="confirmarDesativar(${s.id},'${nome}')">Desativar</button>`
       : `<button class="btn btn-ghost btn-sm"  onclick="confirmarReativar(${s.id},'${nome}','${url}','${cat}')">Reativar</button>`;
