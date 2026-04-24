@@ -226,29 +226,53 @@ async function carregarGraficoTodosSites(dias, tipo) {
   const sites = todosOsSites.filter(s => s.ativo);
   if (!sites.length) { limparGrafico(); return; }
   try {
-    const tipoQuery = (tipo === 'pontos_milhas') ? 'pontos_milhas' : 'cashback';
-    const snapsPorSite = await Promise.all(
-      sites.map(s =>
-        fetch(`${API}/sites/${s.id}/snapshots?tipo=${tipoQuery}&dias=${dias}`)
-          .then(r => r.json())
-          .then(snaps => ({ site: s, snaps }))
-          .catch(() => ({ site: s, snaps: [] }))
-      )
-    );
+    const mostraCash  = !tipo || tipo === 'cashback';
+    const mostraPontos = !tipo || tipo === 'pontos_milhas';
     const labels  = gerarLabels(dias);
     const labelsX = labels.map(l => l.slice(5));
-    const datasets = snapsPorSite.map(({ site, snaps }, idx) => {
-      const cor  = CORES_SITES[idx % CORES_SITES.length];
-      const data = agregarMaxPorDia(snaps, labels);
-      return fazerDataset(`Cashback — ${site.nome}`, data, cor, 'y');
-    });
+    const datasets = [];
+    let corIdx = 0;
+
+    // Linhas de cashback por site
+    if (mostraCash) {
+      const snapsCash = await Promise.all(
+        sites.map(s =>
+          fetch(`${API}/sites/${s.id}/snapshots?tipo=cashback&dias=${dias}`)
+            .then(r => r.json())
+            .then(snaps => ({ site: s, snaps }))
+            .catch(() => ({ site: s, snaps: [] }))
+        )
+      );
+      snapsCash.forEach(({ site, snaps }) => {
+        const cor  = CORES_SITES[corIdx++ % CORES_SITES.length];
+        const data = agregarMaxPorDia(snaps, labels);
+        datasets.push(fazerDataset(`Cashback — ${site.nome}`, data, cor, 'y'));
+      });
+    }
+
+    // Linhas de pontos/milhas por site
+    if (mostraPontos) {
+      const snapsPts = await Promise.all(
+        sites.map(s =>
+          fetch(`${API}/sites/${s.id}/snapshots?tipo=pontos_milhas&dias=${dias}`)
+            .then(r => r.json())
+            .then(snaps => ({ site: s, snaps }))
+            .catch(() => ({ site: s, snaps: [] }))
+        )
+      );
+      snapsPts.forEach(({ site, snaps }) => {
+        const cor  = CORES_SITES[corIdx++ % CORES_SITES.length];
+        const data = agregarMaxPorDia(snaps, labels);
+        datasets.push(fazerDataset(`Pontos/Milhas — ${site.nome}`, data, cor, mostraCash ? 'y2' : 'y'));
+      });
+    }
     if (sites.length > 1) {
       const maiorPorDia = labels.map((_, i) => {
         const vals = datasets.map(ds => ds.data[i]).filter(v => v !== null);
         return vals.length ? Math.max(...vals) : null;
       });
       datasets.push({
-        label: '★ Maior do dia',
+        label: mostraCash ? '★ Maior cashback do dia' : '★ Maior pontos/milhas do dia',
         data: maiorPorDia,
         borderColor: '#f0e040',
         backgroundColor: 'rgba(240,224,64,.06)',
