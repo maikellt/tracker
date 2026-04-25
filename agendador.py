@@ -32,14 +32,21 @@ def _log(mensagem: str):
 
 def _executar_coleta_todos():
     """Job 1 — horário fixo: coleta todos os sites ativos."""
+    from alertas import verificar_e_disparar_alertas
     sites = obter_sites_ativos()
     _log(f"Job horário fixo disparado — {len(sites)} site(s) na fila")
+    threads = []
     for site in sites:
-        threading.Thread(
+        t = threading.Thread(
             target=coletar_site,
             args=(site["id"], site["url"], site["nome"]),
             daemon=True,
-        ).start()
+        )
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join(timeout=120)
+    verificar_e_disparar_alertas()
 
 
 def _executar_coleta_por_intervalo():
@@ -61,6 +68,8 @@ def _executar_coleta_por_intervalo():
     margem = timedelta(minutes=30)
 
     _log(f"Job intervalo verificando — intervalo={intervalo_horas}h, próximo fixo em {int((proximo_fixo - agora).total_seconds() / 60)}min")
+    _threads_intervalo = []
+    _disparou_intervalo = False
 
     sites = obter_sites_ativos()
     for site in sites:
@@ -93,11 +102,14 @@ def _executar_coleta_por_intervalo():
             continue
 
         _log(f"[{site['nome']}] Disparando coleta por intervalo (ultimo: {ultimo.strftime('%H:%M:%S')})")
-        threading.Thread(
+        t = threading.Thread(
             target=coletar_site,
             args=(site["id"], site["url"], site["nome"]),
             daemon=True,
-        ).start()
+        )
+        t.start()
+        _threads_intervalo.append(t)
+        _disparou_intervalo = True
 
 
 def iniciar_agendador():
@@ -118,6 +130,13 @@ def parar_agendador():
         if _scheduler and _scheduler.running:
             _scheduler.shutdown(wait=False)
             _log("Agendador parado")
+
+
+    if _disparou_intervalo:
+        from alertas import verificar_e_disparar_alertas
+        for t in _threads_intervalo:
+            t.join(timeout=120)
+        verificar_e_disparar_alertas()
 
 
 def _registrar_jobs():

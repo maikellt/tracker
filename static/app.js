@@ -73,7 +73,7 @@ function mudarAba(aba) {
   btn.setAttribute('aria-selected', 'true');
   if (aba === 'painel') inicializarPainel();
   if (aba === 'sites')  carregarSites();
-  if (aba === 'config') { carregarConfig(); renderizarAcessos(); }
+  if (aba === 'config') { carregarConfig(); renderizarAcessos(); carregarNotificacoes(); }
 }
 
 async function inicializar() {
@@ -554,6 +554,137 @@ async function salvarConfig(event) {
     renderizarInfoSistema();
     mostrarFeedback(fb, 'ok', 'Configurações salvas. Próxima execução atualizada.');
   } catch (e) { mostrarFeedback(fb, 'err', 'Erro de conexão: ' + e.message); }
+}
+
+
+
+// ── Notificações ──────────────────────────────────────────────────────────────
+
+let configNotif = {};
+
+async function carregarNotificacoes() {
+  try {
+    const res = await fetch(`${API}/notificacoes/config`);
+    configNotif = await res.json();
+    document.getElementById('notif-telegram-ativo').checked = configNotif.telegram_ativo || false;
+    document.getElementById('notif-telegram-token').value   = configNotif.telegram_token || '';
+    document.getElementById('notif-telegram-chat').value    = configNotif.telegram_chat_id || '';
+    document.getElementById('notif-email-ativo').checked    = configNotif.email_ativo || false;
+    document.getElementById('notif-smtp-user').value        = configNotif.smtp_user || '';
+    document.getElementById('notif-smtp-pass').value        = configNotif.smtp_password || '';
+    document.getElementById('notif-email-dest').value       = configNotif.email_destino || '';
+    renderizarLimiares(configNotif.limiares || []);
+  } catch (e) { console.error('Erro ao carregar notificações:', e); }
+}
+
+async function salvarNotifParcial() {
+  const payload = {
+    telegram_ativo:   document.getElementById('notif-telegram-ativo').checked,
+    telegram_token:   document.getElementById('notif-telegram-token').value.trim(),
+    telegram_chat_id: document.getElementById('notif-telegram-chat').value.trim(),
+    email_ativo:      document.getElementById('notif-email-ativo').checked,
+    smtp_user:        document.getElementById('notif-smtp-user').value.trim(),
+    smtp_password:    document.getElementById('notif-smtp-pass').value.trim(),
+    email_destino:    document.getElementById('notif-email-dest').value.trim(),
+    limiares:         configNotif.limiares || [],
+  };
+  try {
+    const res = await fetch(`${API}/notificacoes/config`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    configNotif = await res.json();
+  } catch (e) { console.error('Erro ao salvar notificações:', e); }
+}
+
+async function testarNotificacoes() {
+  await salvarNotifParcial();
+  const fb = document.getElementById('feedback-notif-teste');
+  fb.className = 'feedback feedback-warn';
+  fb.textContent = 'Enviando...';
+  fb.style.display = 'block';
+  try {
+    const res = await fetch(`${API}/notificacoes/teste`, { method: 'POST' });
+    const data = await res.json();
+    const msgs = [];
+    if (data.telegram) msgs.push(`Telegram: ${data.telegram.ok ? '✓ OK' : '✗ ' + data.telegram.detalhe}`);
+    if (data.email)    msgs.push(`Email: ${data.email.ok ? '✓ OK' : '✗ ' + data.email.detalhe}`);
+    const tudoOk = Object.values(data).every(v => v.ok);
+    fb.className = `feedback feedback-${tudoOk ? 'ok' : 'err'}`;
+    fb.textContent = msgs.join(' | ');
+  } catch (e) {
+    fb.className = 'feedback feedback-err';
+    fb.textContent = 'Erro de conexão: ' + e.message;
+  }
+}
+
+// ── Limiares ──────────────────────────────────────────────────────────────────
+
+function renderizarLimiares(limiares) {
+  const tbody = document.getElementById('tabela-limiares');
+  const empty = document.getElementById('empty-limiares');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  if (!limiares.length) { empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  const categorias = [...new Set(todosOsSites.map(s => s.categoria).filter(Boolean))];
+  const parceiros  = [...new Set(todosParceiros.map(p => p.parceiro))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  limiares.forEach((lim, idx) => {
+    const tr = document.createElement('tr');
+    const opsCat  = ['<option value="">Todas</option>', ...categorias.map(c => `<option value="${c}" ${lim.categoria===c?'selected':''}>${c}</option>`)].join('');
+    const opsParc = ['<option value="">Todos</option>', ...parceiros.map(p => `<option value="${p}" ${lim.parceiro===p?'selected':''}>${p}</option>`)].join('');
+    tr.innerHTML = `
+      <td><select onchange="atualizarLimiar(${idx},'categoria',this.value)" style="width:100%">${opsCat}</select></td>
+      <td><select onchange="atualizarLimiar(${idx},'parceiro',this.value)" style="width:100%">${opsParc}</select></td>
+      <td><select onchange="atualizarLimiar(${idx},'tipo',this.value)" style="width:100%">
+        <option value="cashback" ${lim.tipo==='cashback'?'selected':''}>Cashback (%)</option>
+        <option value="pontos_milhas" ${lim.tipo==='pontos_milhas'?'selected':''}>Pontos/Milhas</option>
+      </select></td>
+      <td><input type="number" min="0" step="0.1" value="${lim.valor}" onchange="atualizarLimiar(${idx},'valor',parseFloat(this.value))" style="width:90px"></td>
+      <td><button class="btn btn-danger btn-sm" onclick="removerLimiar(${idx})">✕</button></td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+function adicionarLimiar() {
+  if (!configNotif.limiares) configNotif.limiares = [];
+  configNotif.limiares.push({ categoria: '', parceiro: '', tipo: 'cashback', valor: 5 });
+  renderizarLimiares(configNotif.limiares);
+  salvarLimiares();
+}
+
+function removerLimiar(idx) {
+  configNotif.limiares.splice(idx, 1);
+  renderizarLimiares(configNotif.limiares);
+  salvarLimiares();
+}
+
+function atualizarLimiar(idx, campo, valor) {
+  configNotif.limiares[idx][campo] = valor;
+  salvarLimiares();
+}
+
+async function salvarLimiares() {
+  const fb = document.getElementById('feedback-limiares');
+  try {
+    const payload = {
+      telegram_ativo:   document.getElementById('notif-telegram-ativo').checked,
+      telegram_token:   document.getElementById('notif-telegram-token').value.trim(),
+      telegram_chat_id: document.getElementById('notif-telegram-chat').value.trim(),
+      email_ativo:      document.getElementById('notif-email-ativo').checked,
+      smtp_user:        document.getElementById('notif-smtp-user').value.trim(),
+      smtp_password:    document.getElementById('notif-smtp-pass').value.trim(),
+      email_destino:    document.getElementById('notif-email-dest').value.trim(),
+      limiares:         configNotif.limiares || [],
+    };
+    await fetch(`${API}/notificacoes/config`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (fb) { fb.className = 'feedback feedback-ok'; fb.textContent = '✓ Limiares salvos'; fb.style.display = 'block'; setTimeout(() => { fb.style.display = 'none'; }, 3000); }
+  } catch (e) {
+    if (fb) { fb.className = 'feedback feedback-err'; fb.textContent = 'Erro ao salvar: ' + e.message; fb.style.display = 'block'; }
+  }
 }
 
 document.addEventListener('DOMContentLoaded', inicializar);

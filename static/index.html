@@ -196,6 +196,51 @@
       </div>
       <div id="empty-acessos" class="empty" style="display:none">Nenhum parceiro detectado ainda. Aguarde a próxima coleta.</div>
     </div>
+
+    <div class="card" style="max-width:600px">
+      <div class="card-header"><h2>Notificações</h2></div>
+      <div class="card-body" style="display:flex;flex-direction:column;gap:20px">
+        <div>
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+            <strong style="font-size:13px">Telegram</strong>
+            <label class="toggle-acesso" style="margin:0"><input type="checkbox" id="notif-telegram-ativo" onchange="salvarNotifParcial()"> ativo</label>
+          </div>
+          <div class="form-grid">
+            <div><label for="notif-telegram-token">Bot Token</label><input id="notif-telegram-token" type="password" placeholder="7123456789:AAF..." onchange="salvarNotifParcial()"></div>
+            <div><label for="notif-telegram-chat">Chat ID</label><input id="notif-telegram-chat" type="text" placeholder="815534599" onchange="salvarNotifParcial()"></div>
+          </div>
+        </div>
+        <div>
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+            <strong style="font-size:13px">Email (Gmail)</strong>
+            <label class="toggle-acesso" style="margin:0"><input type="checkbox" id="notif-email-ativo" onchange="salvarNotifParcial()"> ativo</label>
+          </div>
+          <div class="form-grid">
+            <div><label for="notif-smtp-user">Conta Gmail remetente</label><input id="notif-smtp-user" type="email" placeholder="seucashback@gmail.com" onchange="salvarNotifParcial()"></div>
+            <div><label for="notif-smtp-pass">Senha de App</label><input id="notif-smtp-pass" type="password" placeholder="xxxx xxxx xxxx xxxx" onchange="salvarNotifParcial()"></div>
+            <div><label for="notif-email-dest">Email destinatário</label><input id="notif-email-dest" type="email" placeholder="voce@email.com" onchange="salvarNotifParcial()"></div>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-ghost btn-sm" onclick="testarNotificacoes()">&#128225; Enviar teste</button>
+          <div id="feedback-notif-teste"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="max-width:600px">
+      <div class="card-header">
+        <h2>Limiares de alerta</h2>
+        <button class="btn btn-primary btn-sm" onclick="adicionarLimiar()">+ Adicionar</button>
+      </div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr><th>Categoria</th><th>Parceiro</th><th>Tipo</th><th>Valor mínimo</th><th></th></tr></thead>
+          <tbody id="tabela-limiares"></tbody>
+        </table>
+      </div>
+      <div id="empty-limiares" class="empty" style="display:none">Nenhum limiar configurado. Clique em "+ Adicionar".</div>
+      <div id="feedback-limiares" style="padding:8px 16px"></div>
+    </div>
   </section>
 </main>
 <dialog id="modal-confirmacao" aria-modal="true" aria-labelledby="modal-titulo">

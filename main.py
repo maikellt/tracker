@@ -22,6 +22,7 @@ from database import (
     verificar_alerta_sem_dados,
 )
 from scraper import coletar_site
+from notificador import carregar_config_notif, salvar_config_notif, enviar_telegram, enviar_email, formatar_mensagem_teste
 from agendador import iniciar_agendador, parar_agendador, reconfigurar_agendador, obter_config
 
 
@@ -205,6 +206,60 @@ def salvar_preferencias(dados: dict):
     with open(PREFS_PATH, "w") as f:
         json.dump(dados, f)
     return dados
+
+
+
+# ── Notificações ──────────────────────────────────────────────────────────────
+
+class ConfigNotificacao(BaseModel):
+    telegram_ativo:   bool       = False
+    telegram_token:   str        = ""
+    telegram_chat_id: str        = ""
+    email_ativo:      bool       = False
+    smtp_user:        str        = ""
+    smtp_password:    str        = ""
+    email_destino:    str        = ""
+    limiares:         list[dict] = []
+
+
+@app.get("/notificacoes/config")
+def ler_config_notificacoes():
+    cfg = carregar_config_notif()
+    if cfg.get("smtp_password"):
+        cfg["smtp_password"] = "••••••••"
+    return cfg
+
+
+@app.put("/notificacoes/config")
+def salvar_config_notificacoes(dados: ConfigNotificacao):
+    cfg_atual = carregar_config_notif()
+    novo = dados.model_dump()
+    if novo.get("smtp_password") == "••••••••":
+        novo["smtp_password"] = cfg_atual.get("smtp_password", "")
+    salvar_config_notif(novo)
+    resultado = dict(novo)
+    if resultado.get("smtp_password"):
+        resultado["smtp_password"] = "••••••••"
+    return resultado
+
+
+@app.post("/notificacoes/teste")
+def testar_notificacoes():
+    cfg = carregar_config_notif()
+    texto_tg, html_email = formatar_mensagem_teste()
+    resultados = {}
+    if cfg.get("telegram_ativo") and cfg.get("telegram_token") and cfg.get("telegram_chat_id"):
+        ok_r, msg = enviar_telegram(cfg["telegram_token"], cfg["telegram_chat_id"], texto_tg)
+        resultados["telegram"] = {"ok": ok_r, "detalhe": msg}
+    else:
+        resultados["telegram"] = {"ok": False, "detalhe": "Não configurado ou desativado"}
+    if cfg.get("email_ativo") and cfg.get("smtp_user") and cfg.get("smtp_password") and cfg.get("email_destino"):
+        ok_r, msg = enviar_email(cfg["smtp_user"], cfg["smtp_password"], cfg["email_destino"],
+                                 "CashbackTracker — Teste de notificação", html_email)
+        resultados["email"] = {"ok": ok_r, "detalhe": msg}
+    else:
+        resultados["email"] = {"ok": False, "detalhe": "Não configurado ou desativado"}
+    return resultados
 
 if __name__ == "__main__":
     import uvicorn
