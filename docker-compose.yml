@@ -20,10 +20,12 @@ services:
       - PORT=8000
       - AUTH_USER=admin
       - JWT_EXPIRE_HOURS=24
+      - TURSO_URL=libsql://cashback-tracker-maikellt.aws-us-east-1.turso.io
+      - TURSO_TOKEN=eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NzcyNTAxMjYsImlkIjoiMDE5ZGNjNWMtOGYwMS03MmVmLWExZDUtZTY3MjM1ZjUxYzYxIiwicmlkIjoiN2NmNTQwY2YtNjdjYS00ZWVmLWJkYmEtYjFkNGNmZTM4YzI2In0.9NNEUmEpL1iLdP6LE1LMqMkspGz0jjF_GGGhOBESklV19UlD_SoTnh05StEMn_dLHd8JJMuXZKkH6uvL6ycOAA
       # AUTH_PASSWORD e JWT_SECRET gerados automaticamente se não definidos
       # Defina-os aqui para fixar valores permanentes
-      # - AUTH_PASSWORD=sua_senha_aqui
-      # - JWT_SECRET=seu_secret_aqui
+      - AUTH_PASSWORD=kxhQcmylBEDvbnm9fFyFBQ
+      - JWT_SECRET=fv31X8P1t8cQ1fiqFWzbdYANQ9GnsLw9PGIwUJyNTOx
     networks:
       - tracker-net
     healthcheck:
