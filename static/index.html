@@ -89,6 +89,20 @@
   </style>
 </head>
 <body>
+<div id="login-screen" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:999;align-items:center;justify-content:center;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:32px;width:100%;max-width:360px;">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:24px;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#3fb950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 6v2m0 8v2"/></svg>
+      <span style="font-size:16px;font-weight:600">CashbackTracker</span>
+    </div>
+    <div id="login-feedback" style="display:none;margin-bottom:12px"></div>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div><label for="login-user">Usuário</label><input id="login-user" type="text" placeholder="admin" autocomplete="username"></div>
+      <div><label for="login-pass">Senha</label><input id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')fazerLogin()"></div>
+      <button class="btn btn-primary" onclick="fazerLogin()" id="login-btn" style="margin-top:4px">Entrar</button>
+    </div>
+  </div>
+</div>
 <header>
   <div class="logo">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -101,6 +115,7 @@
     <button class="tab-btn"        role="tab" aria-selected="false" aria-controls="tab-sites"  id="btn-sites"  onclick="mudarAba('sites')">&#127760; <span>Sites</span></button>
     <button class="tab-btn"        role="tab" aria-selected="false" aria-controls="tab-config" id="btn-config" onclick="mudarAba('config')">&#9881;&#65039; <span>Configurações</span></button>
   </nav>
+  <button class="btn btn-ghost btn-sm" onclick="logout()" style="margin-left:auto;font-size:12px">Sair</button>
 </header>
 <main>
   <section class="tab-panel active" id="tab-painel" role="tabpanel" aria-labelledby="btn-painel">

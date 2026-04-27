@@ -1,5 +1,11 @@
 import os
+import secrets
 import threading
+from datetime import timedelta
+
+from fastapi import Depends, status
+from fastapi.security import OAuth2PasswordBearer
+from jose import JWTError, jwt
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -35,7 +41,88 @@ async def lifespan(app: FastAPI):
     parar_agendador()
 
 
+
+# ── Autenticação JWT ──────────────────────────────────────────────────────────
+
+def _inicializar_credenciais():
+    """Gera senha e JWT_SECRET aleatórios se não definidos no ambiente.
+    Exibe nos logs para que o operador possa configurar o acesso inicial."""
+    user     = os.getenv("AUTH_USER", "admin")
+    password = os.getenv("AUTH_PASSWORD", "")
+    secret   = os.getenv("JWT_SECRET", "")
+    gerado   = False
+
+    if not password:
+        password = secrets.token_urlsafe(16)
+        gerado = True
+
+    if not secret:
+        secret = secrets.token_hex(32)
+
+    if gerado:
+        separador = "=" * 60
+        print(f"\n{separador}", flush=True)
+        print("  CASHBACKTRACKER — CREDENCIAIS DE ACESSO", flush=True)
+        print(separador, flush=True)
+        print(f"  Usuário : {user}", flush=True)
+        print(f"  Senha   : {password}", flush=True)
+        print(f"  (gerada automaticamente — defina AUTH_PASSWORD", flush=True)
+        print(f"   no docker-compose.yml para tornar permanente)", flush=True)
+        print(f"{separador}\n", flush=True)
+
+    return user, password, secret
+
+
+_AUTH_USER, _AUTH_PASS, _JWT_SECRET = _inicializar_credenciais()
+_JWT_ALGO     = "HS256"
+_JWT_EXPIRE_H = int(os.getenv("JWT_EXPIRE_HOURS", "24"))
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login", auto_error=False)
+
+
+def _criar_token(dados: dict) -> str:
+    from datetime import datetime, timezone
+    payload = dict(dados)
+    payload["exp"] = datetime.now(timezone.utc) + timedelta(hours=_JWT_EXPIRE_H)
+    return jwt.encode(payload, _JWT_SECRET, algorithm=_JWT_ALGO)
+
+
+def _verificar_token(token: str = Depends(oauth2_scheme)):
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Não autenticado",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        payload = jwt.decode(token, _JWT_SECRET, algorithms=[_JWT_ALGO])
+        if payload.get("sub") != _AUTH_USER:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido")
+        return payload
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token expirado ou inválido",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+class LoginEntrada(BaseModel):
+    username: str
+    password: str
+
+
+
 app = FastAPI(title="CashbackTracker", version="3.0.0", lifespan=lifespan)
+
+@app.post("/login")
+def login(dados: LoginEntrada):
+    if dados.username != _AUTH_USER or dados.password != _AUTH_PASS:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciais inválidas")
+    token = _criar_token({"sub": dados.username})
+    return {"access_token": token, "token_type": "bearer", "expires_in": _JWT_EXPIRE_H * 3600}
+
+
 
 
 def _disparar_coleta_inicial():
@@ -89,7 +176,7 @@ class ConfigEntrada(BaseModel):
 
 # ── Sites ─────────────────────────────────────────────────────────────────────
 
-@app.get("/sites")
+@app.get("/sites", dependencies=[Depends(_verificar_token)])
 def listar_sites():
     sites = obter_todos_sites()
     resultado = []
@@ -106,7 +193,7 @@ def listar_sites():
     return resultado
 
 
-@app.post("/sites", status_code=201)
+@app.post("/sites", status_code=201, dependencies=[Depends(_verificar_token)])
 def cadastrar_site(dados: SiteEntrada, response: Response):
     existente = obter_site_por_url(dados.url)
 
@@ -128,7 +215,7 @@ def cadastrar_site(dados: SiteEntrada, response: Response):
     return obter_site_por_id(site_id)
 
 
-@app.delete("/sites/{site_id}", status_code=204)
+@app.delete("/sites/{site_id}", status_code=204, dependencies=[Depends(_verificar_token)])
 def remover_site(site_id: int):
     site = obter_site_por_id(site_id)
     if not site:
@@ -137,7 +224,7 @@ def remover_site(site_id: int):
     return Response(status_code=204)
 
 
-@app.get("/sites/{site_id}/parceiros")
+@app.get("/sites/{site_id}/parceiros", dependencies=[Depends(_verificar_token)])
 def parceiros_site(site_id: int):
     site = obter_site_por_id(site_id)
     if not site:
@@ -145,7 +232,7 @@ def parceiros_site(site_id: int):
     return obter_parceiros_site(site_id)
 
 
-@app.get("/sites/{site_id}/snapshots")
+@app.get("/sites/{site_id}/snapshots", dependencies=[Depends(_verificar_token)])
 def snapshots_site(
     site_id: int,
     parceiro: str | None = None,
@@ -160,7 +247,7 @@ def snapshots_site(
     return obter_snapshots_site(site_id, parceiro=parceiro, tipo=tipo, dias=dias)
 
 
-@app.get("/sites/{site_id}/max")
+@app.get("/sites/{site_id}/max", dependencies=[Depends(_verificar_token)])
 def max_site(site_id: int, dias: int = 30):
     site = obter_site_por_id(site_id)
     if not site:
@@ -172,12 +259,12 @@ def max_site(site_id: int, dias: int = 30):
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-@app.get("/config")
+@app.get("/config", dependencies=[Depends(_verificar_token)])
 def ler_config():
     return obter_config()
 
 
-@app.put("/config")
+@app.put("/config", dependencies=[Depends(_verificar_token)])
 def atualizar_config(dados: ConfigEntrada):
     reconfigurar_agendador(
         novo_scrape_time=dados.scrape_time,
@@ -192,7 +279,7 @@ def atualizar_config(dados: ConfigEntrada):
 
 PREFS_PATH = "/app/data/preferencias.json"
 
-@app.get("/preferencias")
+@app.get("/preferencias", dependencies=[Depends(_verificar_token)])
 def ler_preferencias():
     import json
     if not os.path.exists(PREFS_PATH):
@@ -200,7 +287,7 @@ def ler_preferencias():
     with open(PREFS_PATH, "r") as f:
         return json.load(f)
 
-@app.put("/preferencias")
+@app.put("/preferencias", dependencies=[Depends(_verificar_token)])
 def salvar_preferencias(dados: dict):
     import json
     with open(PREFS_PATH, "w") as f:
@@ -222,7 +309,7 @@ class ConfigNotificacao(BaseModel):
     limiares:         list[dict] = []
 
 
-@app.get("/notificacoes/config")
+@app.get("/notificacoes/config", dependencies=[Depends(_verificar_token)])
 def ler_config_notificacoes():
     cfg = carregar_config_notif()
     if cfg.get("smtp_password"):
@@ -230,7 +317,7 @@ def ler_config_notificacoes():
     return cfg
 
 
-@app.put("/notificacoes/config")
+@app.put("/notificacoes/config", dependencies=[Depends(_verificar_token)])
 def salvar_config_notificacoes(dados: ConfigNotificacao):
     cfg_atual = carregar_config_notif()
     novo = dados.model_dump()
@@ -243,7 +330,7 @@ def salvar_config_notificacoes(dados: ConfigNotificacao):
     return resultado
 
 
-@app.post("/notificacoes/teste")
+@app.post("/notificacoes/teste", dependencies=[Depends(_verificar_token)])
 def testar_notificacoes():
     cfg = carregar_config_notif()
     texto_tg, html_email = formatar_mensagem_teste()

@@ -1,3 +1,74 @@
+// ── Autenticação ──────────────────────────────────────────────────────────────
+
+function getToken() { return localStorage.getItem('ct_token'); }
+function setToken(t) { localStorage.setItem('ct_token', t); }
+function clearToken() { localStorage.removeItem('ct_token'); }
+
+function mostrarLogin() {
+  const ls = document.getElementById('login-screen');
+  if (ls) ls.style.display = 'flex';
+  document.querySelector('header').style.visibility = 'hidden';
+  document.querySelector('main').style.visibility   = 'hidden';
+}
+
+function ocultarLogin() {
+  const ls = document.getElementById('login-screen');
+  if (ls) ls.style.display = 'none';
+  document.querySelector('header').style.visibility = '';
+  document.querySelector('main').style.visibility   = '';
+}
+
+// Interceptar fetch global — injetar Bearer token e tratar 401
+const _fetchOriginal = window.fetch.bind(window);
+window.fetch = async function(url, opts = {}) {
+  const token = getToken();
+  if (token) opts.headers = { ...(opts.headers || {}), 'Authorization': 'Bearer ' + token };
+  const res = await _fetchOriginal(url, opts);
+  if (res.status === 401) { clearToken(); mostrarLogin(); throw new Error('Sessão expirada'); }
+  return res;
+};
+
+async function fazerLogin() {
+  const user = document.getElementById('login-user').value.trim();
+  const pass = document.getElementById('login-pass').value;
+  const fb   = document.getElementById('login-feedback');
+  const btn  = document.getElementById('login-btn');
+  if (!user || !pass) {
+    fb.className = 'feedback feedback-err';
+    fb.textContent = 'Preencha usuário e senha.';
+    fb.style.display = 'block';
+    return;
+  }
+  btn.disabled = true; btn.textContent = 'Entrando...';
+  try {
+    const res = await _fetchOriginal(API + '/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: user, password: pass }),
+    });
+    if (!res.ok) {
+      const data = await res.json();
+      fb.className = 'feedback feedback-err';
+      fb.textContent = data.detail || 'Credenciais inválidas.';
+      fb.style.display = 'block';
+      return;
+    }
+    const data = await res.json();
+    setToken(data.access_token);
+    ocultarLogin();
+    await inicializarApp();
+  } catch (e) {
+    fb.className = 'feedback feedback-err';
+    fb.textContent = 'Erro: ' + e.message;
+    fb.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Entrar';
+  }
+}
+
+function logout() { clearToken(); mostrarLogin(); }
+
 const API = '';
 let todosOsSites = [];
 let todosParceiros = [];
@@ -687,4 +758,7 @@ async function salvarLimiares() {
   }
 }
 
-document.addEventListener('DOMContentLoaded', inicializar);
+document.addEventListener('DOMContentLoaded', () => {
+  if (getToken()) { ocultarLogin(); inicializarApp(); }
+  else { mostrarLogin(); }
+});

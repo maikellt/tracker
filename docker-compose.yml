@@ -18,6 +18,12 @@ services:
       - LOG_LEVEL=INFO
       - HOST=0.0.0.0
       - PORT=8000
+      - AUTH_USER=admin
+      - JWT_EXPIRE_HOURS=24
+      # AUTH_PASSWORD e JWT_SECRET gerados automaticamente se não definidos
+      # Defina-os aqui para fixar valores permanentes
+      # - AUTH_PASSWORD=sua_senha_aqui
+      # - JWT_SECRET=seu_secret_aqui
     networks:
       - tracker-net
     healthcheck:
