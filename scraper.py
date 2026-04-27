@@ -3,6 +3,7 @@ import time
 import requests
 from datetime import datetime
 from bs4 import BeautifulSoup
+#from cache import invalidar_cache
 from database import salvar_snapshot, registrar_erro
 
 USER_AGENT = (

@@ -34,7 +34,7 @@ from agendador import iniciar_agendador, parar_agendador, reconfigurar_agendador
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    inicializar_banco()
+    inicializar_banco()  # já sincroniza Turso → local internamente
     iniciar_agendador()
     _disparar_coleta_inicial()
     yield

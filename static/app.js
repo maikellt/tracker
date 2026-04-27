@@ -152,12 +152,19 @@ async function inicializar() {
   await inicializarPainel();
 }
 
+async function inicializarApp() {
+  await inicializarPainel();
+}
+
 async function inicializarPainel() {
-  await carregarSitesBase();
+  // Carregar sites e preferências em paralelo
+  await Promise.all([carregarSitesBase(), carregarAcessoLocal()]);
+  // Carregar parceiros (depende de todosOsSites) e renderizar
   await carregarTodosParceiros();
   aplicarFiltros();
-  await carregarGrafico();
   renderizarAlertas();
+  // Gráfico em background — não bloqueia a renderização da tabela
+  carregarGrafico();
 }
 
 function renderizarAlertas() {
@@ -225,7 +232,7 @@ function aplicarFiltros() {
   if (apenasAcesso) lista = lista.filter(p => acessoMap[p.parceiro]);
   renderizarTabelaParceiros(lista);
   atualizarSummary(lista);
-  carregarGrafico();
+  carregarGrafico();  // não-bloqueante (sem await)
 }
 
 function renderizarTabelaParceiros(lista) {
@@ -282,10 +289,15 @@ async function carregarGrafico() {
   const tipoFiltro = document.getElementById('filtro-tipo').value;
   const siteId = document.getElementById('filtro-site').value;
   const dias   = Number(document.getElementById('grafico-dias').value || 30);
-  if (siteId) {
-    await carregarGraficoUmSite(siteId, dias, tipoFiltro);
-  } else {
-    await carregarGraficoTodosSites(dias, tipoFiltro);
+  console.log('[GRAFICO] siteId=', siteId, 'dias=', dias, 'tipo=', tipoFiltro, 'sites=', todosOsSites.length);
+  try {
+    if (siteId) {
+      await carregarGraficoUmSite(siteId, dias, tipoFiltro);
+    } else {
+      await carregarGraficoTodosSites(dias, tipoFiltro);
+    }
+  } catch(e) {
+    console.error('[GRAFICO] erro:', e);
   }
 }
 

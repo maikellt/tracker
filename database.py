@@ -1,12 +1,18 @@
 import os
+import sqlite3
+import threading
+import logging
 from datetime import datetime
 
 import libsql_experimental as libsql
 
-# ── Conexão ───────────────────────────────────────────────────────────────────
+logger = logging.getLogger(__name__)
+
+# ── Configuração ──────────────────────────────────────────────────────────────
 
 TURSO_URL   = os.getenv("TURSO_URL", "")
 TURSO_TOKEN = os.getenv("TURSO_TOKEN", "")
+LOCAL_DB    = "/tmp/tracker_local.db"  # SQLite em /tmp — rápido, efêmero
 
 SITES_INICIAIS = [
     {
@@ -21,156 +27,264 @@ SITES_INICIAIS = [
     },
 ]
 
-
-def conectar():
-    if TURSO_URL and TURSO_TOKEN:
-        conn = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
-    else:
-        # Fallback local para desenvolvimento
-        import sqlite3
-        conn = sqlite3.connect(os.getenv("DB_PATH", "/app/data/tracker.db"))
-        conn.row_factory = sqlite3.Row
-        return conn
-    return conn
+_turso_conn  = None
+_thread_local = threading.local()
+_sync_lock    = threading.Lock()
 
 
-def _rows_to_dicts(rows):
-    """Converte rows do libSQL para lista de dicts."""
-    if rows is None:
+# ── Conexões ──────────────────────────────────────────────────────────────────
+
+def _turso():
+    global _turso_conn
+    if _turso_conn is None and TURSO_URL and TURSO_TOKEN:
+        _turso_conn = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+    return _turso_conn
+
+
+def _local():
+    """Retorna conexão SQLite exclusiva para a thread atual."""
+    if not hasattr(_thread_local, "conn") or _thread_local.conn is None:
+        _thread_local.conn = sqlite3.connect(LOCAL_DB)
+        _thread_local.conn.row_factory = sqlite3.Row
+        _thread_local.conn.execute("PRAGMA journal_mode=WAL")
+        _thread_local.conn.execute("PRAGMA synchronous=NORMAL")
+    return _thread_local.conn
+
+
+def _local_exec(sql, params=()):
+    return _local().execute(sql, params)
+
+
+def _local_write(sql, params=()):
+    conn = _local()
+    result = conn.execute(sql, params)
+    conn.commit()
+    return result
+
+
+def _turso_write_async(sql, params=()):
+    """Replica escrita no Turso de forma assíncrona — não bloqueia."""
+    def _sync():
+        with _sync_lock:
+            try:
+                t = _turso()
+                if t:
+                    t.execute(sql, params)
+                    t.commit()
+            except Exception as e:
+                logger.warning(f"[TURSO] Falha na replicação: {e}")
+    threading.Thread(target=_sync, daemon=True).start()
+
+
+# ── Schema ────────────────────────────────────────────────────────────────────
+
+DDL = [
+    """CREATE TABLE IF NOT EXISTS sites (
+        id        INTEGER PRIMARY KEY,
+        url       TEXT NOT NULL UNIQUE,
+        nome      TEXT NOT NULL,
+        categoria TEXT NOT NULL,
+        ativo     INTEGER DEFAULT 1
+    )""",
+    """CREATE TABLE IF NOT EXISTS snapshots (
+        id           INTEGER PRIMARY KEY,
+        site_id      INTEGER REFERENCES sites(id),
+        parceiro     TEXT    NOT NULL,
+        tipo         TEXT    NOT NULL,
+        percentual   REAL,
+        unidade      TEXT,
+        capturado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS erros_scraping (
+        id         INTEGER PRIMARY KEY,
+        site_id    INTEGER REFERENCES sites(id),
+        motivo     TEXT    NOT NULL,
+        tentado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
+]
+
+
+def _criar_schema_local():
+    for ddl in DDL:
+        _local_write(ddl)
+
+
+# ── Sincronização Turso → SQLite local ───────────────────────────────────────
+
+def _rows_turso(sql, params=()):
+    t = _turso()
+    if not t:
         return []
-    desc = rows.description
+    cur = t.execute(sql, params)
+    desc = cur.description
     if not desc:
         return []
     cols = [d[0] for d in desc]
-    return [dict(zip(cols, row)) for row in rows.fetchall()]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
-def _row_to_dict(rows):
-    dicts = _rows_to_dicts(rows)
-    return dicts[0] if dicts else None
+def _sincronizar_do_turso():
+    """Copia todos os dados do Turso para o SQLite local."""
+    logger.info("[SYNC] Iniciando sincronização Turso → local...")
 
+    # Sites
+    sites = _rows_turso("SELECT id, url, nome, categoria, ativo FROM sites")
+    for s in sites:
+        _local_write(
+            "INSERT OR REPLACE INTO sites (id, url, nome, categoria, ativo) VALUES (?,?,?,?,?)",
+            (s["id"], s["url"], s["nome"], s["categoria"], s["ativo"]),
+        )
+    logger.info(f"[SYNC] {len(sites)} site(s) sincronizado(s)")
+
+    # Snapshots em lotes
+    total = _rows_turso("SELECT COUNT(*) as n FROM snapshots")[0]["n"]
+    LOTE, offset, sync = 1000, 0, 0
+    while True:
+        rows = _rows_turso(
+            "SELECT id, site_id, parceiro, tipo, percentual, unidade, capturado_em "
+            "FROM snapshots ORDER BY id LIMIT ? OFFSET ?",
+            (LOTE, offset)
+        )
+        if not rows:
+            break
+        for r in rows:
+            _local_write(
+                "INSERT OR REPLACE INTO snapshots "
+                "(id, site_id, parceiro, tipo, percentual, unidade, capturado_em) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (r["id"], r["site_id"], r["parceiro"], r["tipo"],
+                 r["percentual"], r["unidade"], r["capturado_em"]),
+            )
+        sync += len(rows)
+        offset += LOTE
+    logger.info(f"[SYNC] {sync}/{total} snapshot(s) sincronizado(s)")
+
+    # Erros
+    erros = _rows_turso("SELECT id, site_id, motivo, tentado_em FROM erros_scraping")
+    for e in erros:
+        _local_write(
+            "INSERT OR REPLACE INTO erros_scraping (id, site_id, motivo, tentado_em) VALUES (?,?,?,?)",
+            (e["id"], e["site_id"], e["motivo"], e["tentado_em"]),
+        )
+    logger.info(f"[SYNC] {len(erros)} erro(s) sincronizado(s)")
+    logger.info("[SYNC] Sincronização concluída")
+
+
+# ── Inicialização ─────────────────────────────────────────────────────────────
 
 def inicializar_banco():
-    conn = conectar()
+    _criar_schema_local()
 
-    # libSQL não suporta executescript — executar DDL separadamente
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS sites (
-            id        INTEGER PRIMARY KEY,
-            url       TEXT NOT NULL UNIQUE,
-            nome      TEXT NOT NULL,
-            categoria TEXT NOT NULL,
-            ativo     INTEGER DEFAULT 1
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS snapshots (
-            id           INTEGER PRIMARY KEY,
-            site_id      INTEGER REFERENCES sites(id),
-            parceiro     TEXT    NOT NULL,
-            tipo         TEXT    NOT NULL,
-            percentual   REAL,
-            unidade      TEXT,
-            capturado_em DATETIME DEFAULT (datetime('now'))
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS erros_scraping (
-            id         INTEGER PRIMARY KEY,
-            site_id    INTEGER REFERENCES sites(id),
-            motivo     TEXT    NOT NULL,
-            tentado_em DATETIME DEFAULT (datetime('now'))
-        )
-    """)
-    conn.commit()
-
-    for site in SITES_INICIAIS:
-        conn.execute(
-            "INSERT OR IGNORE INTO sites (url, nome, categoria) VALUES (?, ?, ?)",
-            (site["url"], site["nome"], site["categoria"]),
-        )
-    conn.commit()
+    if TURSO_URL and TURSO_TOKEN:
+        # Criar schema no Turso se necessário
+        t = _turso()
+        for ddl in DDL:
+            t.execute(ddl)
+        t.commit()
+        # Sincronizar dados do Turso para local
+        _sincronizar_do_turso()
+    else:
+        # Modo local puro (dev)
+        for site in SITES_INICIAIS:
+            _local_write(
+                "INSERT OR IGNORE INTO sites (url, nome, categoria) VALUES (?,?,?)",
+                (site["url"], site["nome"], site["categoria"]),
+            )
 
 
 # ── Sites ─────────────────────────────────────────────────────────────────────
 
+def _row(sql, params=()):
+    row = _local_exec(sql, params).fetchone()
+    return dict(row) if row else None
+
+
+def _rows(sql, params=()):
+    return [dict(r) for r in _local_exec(sql, params).fetchall()]
+
+
 def obter_sites_ativos():
-    conn = conectar()
-    rows = conn.execute("SELECT id, url, nome FROM sites WHERE ativo = 1")
-    return [{"id": r["id"], "url": r["url"], "nome": r["nome"]}
-            for r in _rows_to_dicts(rows)]
+    return _rows("SELECT id, url, nome FROM sites WHERE ativo = 1")
 
 
 def obter_todos_sites():
-    conn = conectar()
-    rows = conn.execute("SELECT * FROM sites ORDER BY id")
-    return _rows_to_dicts(rows)
+    return _rows("SELECT * FROM sites ORDER BY id")
 
 
 def obter_site_por_id(site_id: int):
-    conn = conectar()
-    rows = conn.execute("SELECT * FROM sites WHERE id = ?", (site_id,))
-    return _row_to_dict(rows)
+    return _row("SELECT * FROM sites WHERE id = ?", (site_id,))
 
 
 def obter_site_por_url(url: str):
-    conn = conectar()
-    rows = conn.execute("SELECT * FROM sites WHERE url = ?", (url,))
-    return _row_to_dict(rows)
+    return _row("SELECT * FROM sites WHERE url = ?", (url,))
 
 
 def inserir_site(url: str, nome: str, categoria: str) -> int:
-    conn = conectar()
-    result = conn.execute(
-        "INSERT INTO sites (url, nome, categoria) VALUES (?, ?, ?)",
+    result = _local_write(
+        "INSERT INTO sites (url, nome, categoria) VALUES (?,?,?)",
         (url, nome, categoria),
     )
-    conn.commit()
-    return result.lastrowid
+    site_id = result.lastrowid
+    _turso_write_async(
+        "INSERT OR IGNORE INTO sites (id, url, nome, categoria) VALUES (?,?,?,?)",
+        (site_id, url, nome, categoria),
+    )
+    return site_id
 
 
 def reativar_site(site_id: int, nome: str, categoria: str):
-    conn = conectar()
-    conn.execute(
-        "UPDATE sites SET ativo = 1, nome = ?, categoria = ? WHERE id = ?",
+    _local_write(
+        "UPDATE sites SET ativo=1, nome=?, categoria=? WHERE id=?",
         (nome, categoria, site_id),
     )
-    conn.commit()
+    _turso_write_async(
+        "UPDATE sites SET ativo=1, nome=?, categoria=? WHERE id=?",
+        (nome, categoria, site_id),
+    )
 
 
 def desativar_site(site_id: int):
-    conn = conectar()
-    conn.execute("UPDATE sites SET ativo = 0 WHERE id = ?", (site_id,))
-    conn.commit()
+    _local_write("UPDATE sites SET ativo=0 WHERE id=?", (site_id,))
+    _turso_write_async("UPDATE sites SET ativo=0 WHERE id=?", (site_id,))
 
 
 # ── Snapshots ─────────────────────────────────────────────────────────────────
 
 def salvar_snapshot(site_id: int, parceiro: str, tipo: str, percentual, unidade):
-    conn = conectar()
-    conn.execute(
-        "INSERT INTO snapshots (site_id, parceiro, tipo, percentual, unidade) VALUES (?, ?, ?, ?, ?)",
+    result = _local_write(
+        "INSERT INTO snapshots (site_id, parceiro, tipo, percentual, unidade) VALUES (?,?,?,?,?)",
         (site_id, parceiro, tipo, percentual, unidade),
     )
-    conn.commit()
+    snap_id = result.lastrowid
+    # Buscar capturado_em gerado pelo SQLite para replicar igual
+    row = _row("SELECT capturado_em FROM snapshots WHERE id=?", (snap_id,))
+    cap = row["capturado_em"] if row else None
+    _turso_write_async(
+        "INSERT INTO snapshots (id, site_id, parceiro, tipo, percentual, unidade, capturado_em) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (snap_id, site_id, parceiro, tipo, percentual, unidade, cap),
+    )
 
 
 def registrar_erro(site_id: int, motivo: str):
-    conn = conectar()
-    conn.execute(
-        "INSERT INTO erros_scraping (site_id, motivo) VALUES (?, ?)",
+    result = _local_write(
+        "INSERT INTO erros_scraping (site_id, motivo) VALUES (?,?)",
         (site_id, motivo),
     )
-    conn.commit()
+    err_id = result.lastrowid
+    row = _row("SELECT tentado_em FROM erros_scraping WHERE id=?", (err_id,))
+    tent = row["tentado_em"] if row else None
+    _turso_write_async(
+        "INSERT INTO erros_scraping (id, site_id, motivo, tentado_em) VALUES (?,?,?,?)",
+        (err_id, site_id, motivo, tent),
+    )
 
 
 def obter_ultimo_scraping_sucesso(site_id: int):
-    conn = conectar()
-    rows = conn.execute(
-        "SELECT MAX(capturado_em) as ultima FROM snapshots WHERE site_id = ?",
+    row = _row(
+        "SELECT MAX(capturado_em) as ultima FROM snapshots WHERE site_id=?",
         (site_id,),
     )
-    row = _row_to_dict(rows)
     valor = row["ultima"] if row else None
     if valor:
         try:
@@ -181,29 +295,24 @@ def obter_ultimo_scraping_sucesso(site_id: int):
 
 
 def obter_parceiros_site(site_id: int) -> dict:
-    conn = conectar()
     resultado = {"cashback": [], "pontos_milhas": []}
 
     for tipo in ["cashback", "pontos_milhas"]:
-        rows_data = conn.execute(
-            "SELECT MAX(capturado_em) as recente FROM snapshots WHERE site_id = ? AND tipo = ?",
+        row_data = _row(
+            "SELECT MAX(capturado_em) as recente FROM snapshots WHERE site_id=? AND tipo=?",
             (site_id, tipo),
         )
-        row_data = _row_to_dict(rows_data)
         data_recente = row_data["recente"] if row_data else None
         if not data_recente:
             continue
 
-        rows_ativos = conn.execute(
-            """
-            SELECT parceiro, percentual, unidade, capturado_em
-            FROM snapshots
-            WHERE site_id = ? AND tipo = ? AND capturado_em = ?
-            ORDER BY percentual DESC
-            """,
+        ativos = _rows(
+            """SELECT parceiro, percentual, unidade, capturado_em
+               FROM snapshots
+               WHERE site_id=? AND tipo=? AND capturado_em=?
+               ORDER BY percentual DESC""",
             (site_id, tipo, data_recente),
         )
-        ativos = _rows_to_dicts(rows_ativos)
         nomes_ativos = {r["parceiro"] for r in ativos}
 
         for r in ativos:
@@ -217,31 +326,24 @@ def obter_parceiros_site(site_id: int) -> dict:
 
         if nomes_ativos:
             placeholders = ",".join("?" * len(nomes_ativos))
-            rows_inativos = conn.execute(
-                f"""
-                SELECT DISTINCT parceiro FROM snapshots
-                WHERE site_id = ? AND tipo = ? AND parceiro NOT IN ({placeholders})
-                """,
+            inativos = _rows(
+                f"SELECT DISTINCT parceiro FROM snapshots "
+                f"WHERE site_id=? AND tipo=? AND parceiro NOT IN ({placeholders})",
                 (site_id, tipo, *nomes_ativos),
             )
-            inativos = _rows_to_dicts(rows_inativos)
         else:
-            rows_inativos = conn.execute(
-                "SELECT DISTINCT parceiro FROM snapshots WHERE site_id = ? AND tipo = ?",
+            inativos = _rows(
+                "SELECT DISTINCT parceiro FROM snapshots WHERE site_id=? AND tipo=?",
                 (site_id, tipo),
             )
-            inativos = _rows_to_dicts(rows_inativos)
 
         for r in inativos:
-            rows_ultimo = conn.execute(
-                """
-                SELECT percentual, unidade, capturado_em FROM snapshots
-                WHERE site_id = ? AND tipo = ? AND parceiro = ?
-                ORDER BY capturado_em DESC LIMIT 1
-                """,
+            ultimo = _row(
+                """SELECT percentual, unidade, capturado_em FROM snapshots
+                   WHERE site_id=? AND tipo=? AND parceiro=?
+                   ORDER BY capturado_em DESC LIMIT 1""",
                 (site_id, tipo, r["parceiro"]),
             )
-            ultimo = _row_to_dict(rows_ultimo)
             resultado[tipo].append({
                 "parceiro":      r["parceiro"],
                 "status":        "inativo",
@@ -254,65 +356,47 @@ def obter_parceiros_site(site_id: int) -> dict:
 
 
 def obter_snapshots_site(site_id: int, parceiro=None, tipo=None, dias=30) -> list:
-    conn = conectar()
     query = """
         SELECT id, parceiro, tipo, percentual, unidade, capturado_em
         FROM snapshots
-        WHERE site_id = ?
-          AND capturado_em >= datetime('now', ?)
+        WHERE site_id=? AND capturado_em >= datetime('now', ?)
     """
     params = [site_id, f"-{dias} days"]
-
     if parceiro:
         query += " AND LOWER(parceiro) LIKE LOWER(?)"
         params.append(f"%{parceiro}%")
     if tipo:
-        query += " AND tipo = ?"
+        query += " AND tipo=?"
         params.append(tipo)
-
     query += " ORDER BY capturado_em DESC"
-    rows = conn.execute(query, params)
-    return _rows_to_dicts(rows)
+    return _rows(query, params)
 
 
 def obter_max_site(site_id: int, dias=30) -> dict:
-    conn = conectar()
     resultado = {"cashback": None, "pontos_milhas": None}
-
     for tipo in ["cashback", "pontos_milhas"]:
-        rows = conn.execute(
-            """
-            SELECT percentual, parceiro, DATE(capturado_em) as data
-            FROM snapshots
-            WHERE site_id = ? AND tipo = ?
-              AND percentual IS NOT NULL
-              AND capturado_em >= datetime('now', ?)
-            ORDER BY percentual DESC
-            LIMIT 1
-            """,
+        row = _row(
+            """SELECT percentual, parceiro, DATE(capturado_em) as data
+               FROM snapshots
+               WHERE site_id=? AND tipo=? AND percentual IS NOT NULL
+                 AND capturado_em >= datetime('now', ?)
+               ORDER BY percentual DESC LIMIT 1""",
             (site_id, tipo, f"-{dias} days"),
         )
-        row = _row_to_dict(rows)
         if row:
             resultado[tipo] = {
                 "valor":    row["percentual"],
                 "parceiro": row["parceiro"],
                 "data":     row["data"],
             }
-
     return resultado
 
 
 def verificar_alerta_sem_dados(site_id: int) -> bool:
-    conn = conectar()
-    rows = conn.execute(
-        """
-        SELECT COUNT(*) as total FROM snapshots
-        WHERE site_id = ?
-          AND percentual IS NOT NULL
-          AND capturado_em >= datetime('now', '-2 days')
-        """,
+    row = _row(
+        """SELECT COUNT(*) as total FROM snapshots
+           WHERE site_id=? AND percentual IS NOT NULL
+             AND capturado_em >= datetime('now', '-2 days')""",
         (site_id,),
     )
-    row = _row_to_dict(rows)
     return (row["total"] if row else 0) == 0
