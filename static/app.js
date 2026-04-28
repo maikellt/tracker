@@ -391,12 +391,12 @@ async function carregarGraficoTodosSites(dias, tipo) {
 }
 
 function gerarLabels(dias) {
-  const hoje = new Date();
   const labels = [];
   for (let i = dias - 1; i >= 0; i--) {
-    const d = new Date(hoje);
+    const d = new Date();
     d.setDate(d.getDate() - i);
-    labels.push(d.toISOString().split('T')[0]);
+    // 'sv-SE' retorna YYYY-MM-DD no fuso de São Paulo — sem depender do locale do browser
+    labels.push(d.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' }));
   }
   return labels;
 }
@@ -405,7 +405,11 @@ function agregarMaxPorDia(snaps, labels) {
   const mapa = {};
   snaps.forEach(s => {
     if (s.percentual === null) return;
-    const dia = s.capturado_em.slice(0, 10);
+    // capturado_em vem do SQLite sem sufixo de fuso (ex: "2025-04-27 02:00:00").
+    // Sem o 'Z' o JS interpreta como hora local do browser — adicionamos 'Z'
+    // para garantir que o valor seja tratado como UTC antes de converter para BRT.
+    const d = new Date(s.capturado_em.replace(' ', 'T') + 'Z');
+    const dia = d.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
     if (mapa[dia] === undefined || s.percentual > mapa[dia]) mapa[dia] = s.percentual;
   });
   return labels.map(l => mapa[l] !== undefined ? mapa[l] : null);

@@ -1,3 +1,4 @@
+import logging
 import os
 import secrets
 import threading
@@ -14,6 +15,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from database import (
+    banco_tem_dados,
     inicializar_banco,
     obter_sites_ativos,
     obter_todos_sites,
@@ -36,7 +38,18 @@ from agendador import iniciar_agendador, parar_agendador, reconfigurar_agendador
 async def lifespan(app: FastAPI):
     inicializar_banco()  # já sincroniza Turso → local internamente
     iniciar_agendador()
-    _disparar_coleta_inicial()
+    # Só coleta no startup se o banco estiver vazio.
+    # Quando o container reinicia, o Turso já sincronizou tudo —
+    # disparar coleta imediata sobrescreveria dados recentes com valores
+    # coletados fora do horário agendado.
+    if banco_tem_dados():
+        logger.info(
+            "[STARTUP] Banco já possui dados (sincronizados do Turso) — "
+            "coleta inicial suprimida. Próxima coleta no horário agendado."
+        )
+    else:
+        logger.info("[STARTUP] Banco vazio — disparando coleta inicial.")
+        _disparar_coleta_inicial()
     yield
     parar_agendador()
 
@@ -76,6 +89,8 @@ def _inicializar_credenciais():
 _AUTH_USER, _AUTH_PASS, _JWT_SECRET = _inicializar_credenciais()
 _JWT_ALGO     = "HS256"
 _JWT_EXPIRE_H = int(os.getenv("JWT_EXPIRE_HOURS", "24"))
+
+logger = logging.getLogger(__name__)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login", auto_error=False)
 

@@ -250,6 +250,15 @@ def desativar_site(site_id: int):
 
 # ── Snapshots ─────────────────────────────────────────────────────────────────
 
+def banco_tem_dados() -> bool:
+    """Retorna True se já existem snapshots no banco local.
+    Chamado no startup para evitar coleta desnecessária após sincronização do Turso.
+    Quando o container reinicia, o Turso sincroniza tudo — não há motivo para
+    coletar imediatamente e potencialmente sobrescrever dados recentes."""
+    row = _row("SELECT COUNT(*) as total FROM snapshots")
+    return (row["total"] if row else 0) > 0
+
+
 def salvar_snapshot(site_id: int, parceiro: str, tipo: str, percentual, unidade):
     result = _local_write(
         "INSERT INTO snapshots (site_id, parceiro, tipo, percentual, unidade) VALUES (?,?,?,?,?)",
