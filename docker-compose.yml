@@ -11,6 +11,8 @@ services:
       - "8086:8000"
     volumes:
       - /data/tracker:/app/data
+    env_file:
+      - .env
     environment:
       - SCRAPE_TIME=06:00
       - SCRAPE_INTERVAL_HOURS=24
@@ -18,14 +20,14 @@ services:
       - LOG_LEVEL=INFO
       - HOST=0.0.0.0
       - PORT=8000
-      - AUTH_USER=admin
-      - JWT_EXPIRE_HOURS=24
-      - TURSO_URL=libsql://cashback-tracker-maikellt.aws-us-east-1.turso.io
-      - TURSO_TOKEN=eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NzcyNTAxMjYsImlkIjoiMDE5ZGNjNWMtOGYwMS03MmVmLWExZDUtZTY3MjM1ZjUxYzYxIiwicmlkIjoiN2NmNTQwY2YtNjdjYS00ZWVmLWJkYmEtYjFkNGNmZTM4YzI2In0.9NNEUmEpL1iLdP6LE1LMqMkspGz0jjF_GGGhOBESklV19UlD_SoTnh05StEMn_dLHd8JJMuXZKkH6uvL6ycOAA
+      - TURSO_URL=${TURSO_URL}
+      - TURSO_TOKEN=${TURSO_TOKEN}
       # AUTH_PASSWORD e JWT_SECRET gerados automaticamente se não definidos
       # Defina-os aqui para fixar valores permanentes
-      - AUTH_PASSWORD=kxhQcmylBEDvbnm9fFyFBQ
-      - JWT_SECRET=fv31X8P1t8cQ1fiqFWzbdYANQ9GnsLw9PGIwUJyNTOx
+      - AUTH_USER=${AUTH_USER}
+      - AUTH_PASSWORD=${AUTH_PASSWORD}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRE_HOURS=24
     networks:
       - tracker-net
     healthcheck:
