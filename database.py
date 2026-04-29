@@ -101,6 +101,10 @@ DDL = [
         motivo     TEXT    NOT NULL,
         tentado_em DATETIME DEFAULT CURRENT_TIMESTAMP
     )""",
+    """CREATE TABLE IF NOT EXISTS configuracoes (
+        chave TEXT PRIMARY KEY,
+        valor TEXT NOT NULL
+    )""",
 ]
 
 
@@ -168,6 +172,17 @@ def _sincronizar_do_turso():
         )
     logger.info(f"[SYNC] {len(erros)} erro(s) sincronizado(s)")
     logger.info("[SYNC] Sincronização concluída")
+
+
+def _sincronizar_configuracoes_do_turso():
+    """Sincroniza tabela configuracoes do Turso para o SQLite local."""
+    rows = _rows_turso("SELECT chave, valor FROM configuracoes")
+    for r in rows:
+        _local_write(
+            "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES (?, ?)",
+            (r["chave"], r["valor"]),
+        )
+    logger.info(f"[SYNC] {len(rows)} configuração(ões) sincronizada(s)")
 
 
 # ── Inicialização ─────────────────────────────────────────────────────────────
@@ -399,6 +414,34 @@ def obter_max_site(site_id: int, dias=30) -> dict:
                 "data":     row["data"],
             }
     return resultado
+
+
+# ── Configurações persistidas ─────────────────────────────────────────────────
+
+def obter_configuracao(chave: str) -> dict | None:
+    """Retorna o valor JSON de uma chave de configuração, ou None se não existir."""
+    import json
+    row = _row("SELECT valor FROM configuracoes WHERE chave = ?", (chave,))
+    if not row:
+        return None
+    try:
+        return json.loads(row["valor"])
+    except Exception:
+        return None
+
+
+def salvar_configuracao(chave: str, dados: dict):
+    """Salva ou atualiza uma configuração no banco local e replica no Turso."""
+    import json
+    valor = json.dumps(dados, ensure_ascii=False)
+    _local_write(
+        "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES (?, ?)",
+        (chave, valor),
+    )
+    _turso_write_async(
+        "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES (?, ?)",
+        (chave, valor),
+    )
 
 
 def verificar_alerta_sem_dados(site_id: int) -> bool:

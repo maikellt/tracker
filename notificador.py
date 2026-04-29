@@ -1,28 +1,22 @@
 import smtplib
 import ssl
-import json
 import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 import requests
 
-NOTIF_PATH = "/app/data/notificacoes.json"
 
-
-def carregar_config_notif():
-    if not os.path.exists(NOTIF_PATH):
-        return {}
-    try:
-        with open(NOTIF_PATH, "r") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+def carregar_config_notif() -> dict:
+    """Carrega configurações de notificação do banco de dados."""
+    from database import obter_configuracao
+    return obter_configuracao("notificacoes") or {}
 
 
 def salvar_config_notif(cfg: dict):
-    with open(NOTIF_PATH, "w") as f:
-        json.dump(cfg, f, indent=2)
+    """Salva configurações de notificação no banco de dados."""
+    from database import salvar_configuracao
+    salvar_configuracao("notificacoes", cfg)
 
 
 def enviar_telegram(token: str, chat_id: str, mensagem: str) -> tuple[bool, str]:

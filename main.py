@@ -28,6 +28,8 @@ from database import (
     obter_snapshots_site,
     obter_max_site,
     verificar_alerta_sem_dados,
+    obter_configuracao,
+    salvar_configuracao,
 )
 from scraper import coletar_site
 from notificador import carregar_config_notif, salvar_config_notif, enviar_telegram, enviar_email, formatar_mensagem_teste
@@ -292,21 +294,14 @@ def atualizar_config(dados: ConfigEntrada):
 
 # ── Preferências ──────────────────────────────────────────────────────────────
 
-PREFS_PATH = "/app/data/preferencias.json"
 
 @app.get("/preferencias", dependencies=[Depends(_verificar_token)])
 def ler_preferencias():
-    import json
-    if not os.path.exists(PREFS_PATH):
-        return {}
-    with open(PREFS_PATH, "r") as f:
-        return json.load(f)
+    return obter_configuracao("preferencias") or {}
 
 @app.put("/preferencias", dependencies=[Depends(_verificar_token)])
 def salvar_preferencias(dados: dict):
-    import json
-    with open(PREFS_PATH, "w") as f:
-        json.dump(dados, f)
+    salvar_configuracao("preferencias", dados)
     return dados
 
 
