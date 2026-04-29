@@ -132,11 +132,6 @@ def parar_agendador():
             _log("Agendador parado")
 
 
-    if _disparou_intervalo:
-        from alertas import verificar_e_disparar_alertas
-        for t in _threads_intervalo:
-            t.join(timeout=120)
-        verificar_e_disparar_alertas()
 
 
 def _registrar_jobs():
