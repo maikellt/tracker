@@ -171,6 +171,8 @@ def _sincronizar_do_turso():
             (e["id"], e["site_id"], e["motivo"], e["tentado_em"]),
         )
     logger.info(f"[SYNC] {len(erros)} erro(s) sincronizado(s)")
+    # Sincronizar configurações (preferências, notificações, limiares)
+    _sincronizar_configuracoes_do_turso()
     logger.info("[SYNC] Sincronização concluída")
 
 
