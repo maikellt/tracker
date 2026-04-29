@@ -225,7 +225,7 @@ function aplicarFiltros() {
   const categoria    = document.getElementById('filtro-categoria').value;
   const tipo         = document.getElementById('filtro-tipo').value;
   const apenasAcesso = document.getElementById('filtro-acesso').checked;
-  let lista = todosParceiros;
+  let lista = todosParceiros.filter(p => p.status === 'ativo');
   if (siteId)       lista = lista.filter(p => String(p.site_id) === siteId);
   if (categoria)    lista = lista.filter(p => p.site_categoria === categoria);
   if (tipo)         lista = lista.filter(p => p.tipo === tipo);
