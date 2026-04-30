@@ -193,7 +193,7 @@ class ConfigEntrada(BaseModel):
 
 # ── Sites ─────────────────────────────────────────────────────────────────────
 
-@app.get("/sites", dependencies=[Depends(_verificar_token)])
+@app.get("/sites")
 def listar_sites():
     sites = obter_todos_sites()
     resultado = []
@@ -241,7 +241,7 @@ def remover_site(site_id: int):
     return Response(status_code=204)
 
 
-@app.get("/sites/{site_id}/parceiros", dependencies=[Depends(_verificar_token)])
+@app.get("/sites/{site_id}/parceiros")
 def parceiros_site(site_id: int):
     site = obter_site_por_id(site_id)
     if not site:
@@ -249,7 +249,7 @@ def parceiros_site(site_id: int):
     return obter_parceiros_site(site_id)
 
 
-@app.get("/sites/{site_id}/snapshots", dependencies=[Depends(_verificar_token)])
+@app.get("/sites/{site_id}/snapshots")
 def snapshots_site(
     site_id: int,
     parceiro: str | None = None,
@@ -264,7 +264,7 @@ def snapshots_site(
     return obter_snapshots_site(site_id, parceiro=parceiro, tipo=tipo, dias=dias)
 
 
-@app.get("/sites/{site_id}/max", dependencies=[Depends(_verificar_token)])
+@app.get("/sites/{site_id}/max")
 def max_site(site_id: int, dias: int = 30):
     site = obter_site_por_id(site_id)
     if not site:
@@ -276,7 +276,7 @@ def max_site(site_id: int, dias: int = 30):
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-@app.get("/config", dependencies=[Depends(_verificar_token)])
+@app.get("/config")
 def ler_config():
     return obter_config()
 
@@ -295,7 +295,7 @@ def atualizar_config(dados: ConfigEntrada):
 # ── Preferências ──────────────────────────────────────────────────────────────
 
 
-@app.get("/preferencias", dependencies=[Depends(_verificar_token)])
+@app.get("/preferencias")
 def ler_preferencias():
     return obter_configuracao("preferencias") or {}
 
