@@ -4,18 +4,26 @@ function getToken() { return localStorage.getItem('ct_token'); }
 function setToken(t) { localStorage.setItem('ct_token', t); }
 function clearToken() { localStorage.removeItem('ct_token'); }
 
+function mostrarLoginManual() {
+  _abaAposLogin = null;
+  mostrarLogin();
+}
+
 function mostrarLogin() {
   const ls = document.getElementById('login-screen');
   if (ls) ls.style.display = 'flex';
-  document.querySelector('header').style.visibility = 'hidden';
-  document.querySelector('main').style.visibility   = 'hidden';
 }
 
 function ocultarLogin() {
   const ls = document.getElementById('login-screen');
   if (ls) ls.style.display = 'none';
-  document.querySelector('header').style.visibility = '';
-  document.querySelector('main').style.visibility   = '';
+  atualizarUI();
+  // Redirecionar para a aba que o usuário tentou acessar
+  if (_abaAposLogin) {
+    const aba = _abaAposLogin;
+    _abaAposLogin = null;
+    mudarAba(aba);
+  }
 }
 
 // Interceptar fetch global — injetar Bearer token e tratar 401
@@ -67,9 +75,29 @@ async function fazerLogin() {
   }
 }
 
-function logout() { clearToken(); mostrarLogin(); }
+function logout() {
+  clearToken();
+  atualizarUI();
+  mudarAba('painel');
+}
 
 const API = '';
+let _abaAposLogin = null;
+
+function atualizarUI() {
+  const logado = !!getToken();
+  // Abas protegidas — visíveis só quando logado
+  ['sites', 'config'].forEach(aba => {
+    const btn = document.getElementById('btn-' + aba);
+    if (btn) btn.style.display = logado ? '' : 'none';
+  });
+  // Botão do canto superior direito
+  const btnAcesso = document.getElementById('btn-acesso');
+  if (btnAcesso) {
+    btnAcesso.textContent = logado ? 'Sair' : 'Login';
+    btnAcesso.onclick     = logado ? logout : mostrarLoginManual;
+  }
+}
 let todosOsSites = [];
 let todosParceiros = [];
 let acessoMap = {};
@@ -136,6 +164,12 @@ function abrirModal(titulo, msg, callbackConfirmar) {
 }
 
 function mudarAba(aba) {
+  // Abas protegidas exigem autenticação
+  if ((aba === 'sites' || aba === 'config') && !getToken()) {
+    _abaAposLogin = aba;
+    mostrarLogin();
+    return;
+  }
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-selected', 'false'); });
   document.getElementById(`tab-${aba}`).classList.add('active');
@@ -775,6 +809,6 @@ async function salvarLimiares() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  if (getToken()) { ocultarLogin(); inicializarApp(); }
-  else { mostrarLogin(); }
+  atualizarUI();
+  inicializarApp();
 });
