@@ -334,9 +334,14 @@ def obter_parceiros_site(site_id: int) -> dict:
             continue
 
         ativos = _rows(
-            """SELECT parceiro, percentual, unidade, capturado_em
+            """SELECT parceiro,
+                      MAX(percentual)   AS percentual,
+                      unidade,
+                      MAX(capturado_em) AS capturado_em
                FROM snapshots
-               WHERE site_id=? AND tipo=? AND capturado_em=?
+               WHERE site_id=? AND tipo=?
+                 AND capturado_em >= datetime(?, '-10 minutes')
+               GROUP BY parceiro
                ORDER BY percentual DESC""",
             (site_id, tipo, data_recente),
         )

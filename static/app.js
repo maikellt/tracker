@@ -280,12 +280,18 @@ function renderizarTabelaParceiros(lista) {
   if (!lista.length) { empty.style.display = 'block'; contador.textContent = ''; return; }
   empty.style.display = 'none';
   contador.textContent = `${lista.length} parceiro${lista.length !== 1 ? 's' : ''}`;
+  // Mapear site_id → cor da paleta
+  const siteIds = [...new Set(lista.map(p => p.site_id))];
+  const corPorSite = {};
+  siteIds.forEach((id, i) => { corPorSite[id] = CORES_SITES[i % CORES_SITES.length]; });
   lista.forEach(p => {
     const chave = p.parceiro;
     const temAcesso = !!acessoMap[chave];
+    const cor = corPorSite[p.site_id];
     const tr = document.createElement('tr');
+    tr.style.borderLeft = `3px solid ${cor.border}`;
     tr.innerHTML = `
-      <td>${p.site_nome}</td>
+      <td style="padding-left:10px">${p.site_nome}</td>
       <td><strong>${p.parceiro}</strong></td>
       <td>${p.tipo === 'cashback' ? 'Cashback' : 'Pontos/Milhas'}</td>
       <td style="font-variant-numeric:tabular-nums;font-weight:600">${formatarValor(p.ultimo_valor, p.unidade)}</td>
