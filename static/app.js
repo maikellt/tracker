@@ -752,10 +752,21 @@ function renderizarLimiares(limiares) {
   const parceiros  = [...new Set(todosParceiros.map(p => p.parceiro))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
   limiares.forEach((lim, idx) => {
     const tr = document.createElement('tr');
+    // Selects de site, categoria e parceiro
+    // Filtra sites pela categoria do limiar, se houver
+    const sitesFiltrados = lim.categoria
+      ? todosOsSites.filter(s => s.ativo && s.categoria === lim.categoria)
+      : todosOsSites.filter(s => s.ativo);
+    // Se o site selecionado não pertence mais à categoria, limpa a seleção
+    if (lim.site_id && lim.categoria && !sitesFiltrados.find(s => String(s.id) === String(lim.site_id))) {
+      lim.site_id = '';
+    }
+    const opsSite = ['<option value="">Todos</option>', ...sitesFiltrados.map(s => `<option value="${s.id}" ${String(lim.site_id)===String(s.id)?'selected':''}>${s.nome}</option>`)].join('');
     const opsCat  = ['<option value="">Todas</option>', ...categorias.map(c => `<option value="${c}" ${lim.categoria===c?'selected':''}>${c}</option>`)].join('');
     const opsParc = ['<option value="">Todos</option>', ...parceiros.map(p => `<option value="${p}" ${lim.parceiro===p?'selected':''}>${p}</option>`)].join('');
     tr.innerHTML = `
       <td><select onchange="atualizarLimiar(${idx},'categoria',this.value)" style="width:100%">${opsCat}</select></td>
+      <td><select onchange="atualizarLimiar(${idx},'site_id',this.value)" style="width:100%">${opsSite}</select></td>
       <td><select onchange="atualizarLimiar(${idx},'parceiro',this.value)" style="width:100%">${opsParc}</select></td>
       <td><select onchange="atualizarLimiar(${idx},'tipo',this.value)" style="width:100%">
         <option value="cashback" ${lim.tipo==='cashback'?'selected':''}>Cashback (%)</option>
@@ -769,7 +780,7 @@ function renderizarLimiares(limiares) {
 
 function adicionarLimiar() {
   if (!configNotif.limiares) configNotif.limiares = [];
-  configNotif.limiares.push({ categoria: '', parceiro: '', tipo: 'cashback', valor: 5 });
+  configNotif.limiares.push({ site_id: '', categoria: '', parceiro: '', tipo: 'cashback', valor: 5 });
   renderizarLimiares(configNotif.limiares);
   salvarLimiares();
 }
@@ -782,6 +793,11 @@ function removerLimiar(idx) {
 
 function atualizarLimiar(idx, campo, valor) {
   configNotif.limiares[idx][campo] = valor;
+  // Re-renderiza ao mudar categoria para filtrar o select de sites
+  if (campo === 'categoria') {
+    configNotif.limiares[idx].site_id = '';
+    renderizarLimiares(configNotif.limiares);
+  }
   salvarLimiares();
 }
 

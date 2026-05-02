@@ -200,6 +200,7 @@ def inicializar_banco():
         t.commit()
         # Sincronizar dados do Turso para local
         _sincronizar_do_turso()
+        _sincronizar_configuracoes_do_turso()
     else:
         # Modo local puro (dev)
         for site in SITES_INICIAIS:

@@ -42,6 +42,10 @@ def _executar_verificacao():
                 for lim in limiares:
                     if lim.get("tipo") != tipo:
                         continue
+                    # Filtro opcional por site
+                    site_id_lim = lim.get("site_id", "")
+                    if site_id_lim and str(site_id_lim) != str(site["id"]):
+                        continue
                     cat = lim.get("categoria", "")
                     if cat and cat != site.get("categoria", ""):
                         continue
