@@ -128,6 +128,29 @@ const CORES_SITES = [
   { border: '#79c0ff', bg: 'rgba(121,192,255,.12)' },
 ];
 
+// Paleta de cores para categorias — atribuída dinamicamente por ordem de aparição
+const _PALETA_CATEGORIAS = [
+  { border: '#3fb950', bg: 'rgba(63,185,80,.08)',   text: '#3fb950' },   // verde
+  { border: '#58a6ff', bg: 'rgba(88,166,255,.08)',  text: '#58a6ff' },   // azul
+  { border: '#ffa657', bg: 'rgba(255,166,87,.08)',  text: '#ffa657' },   // laranja
+  { border: '#d2a8ff', bg: 'rgba(210,168,255,.08)', text: '#d2a8ff' },   // lilás
+  { border: '#f78166', bg: 'rgba(247,129,102,.08)', text: '#f78166' },   // coral
+  { border: '#79c0ff', bg: 'rgba(121,192,255,.08)', text: '#79c0ff' },   // azul claro
+  { border: '#56d364', bg: 'rgba(86,211,100,.08)',  text: '#56d364' },   // verde claro
+  { border: '#e3b341', bg: 'rgba(227,179,65,.08)',  text: '#e3b341' },   // amarelo
+  { border: '#ff7b72', bg: 'rgba(255,123,114,.08)', text: '#ff7b72' },   // vermelho suave
+  { border: '#a5d6ff', bg: 'rgba(165,214,255,.08)', text: '#a5d6ff' },   // azul pastel
+];
+const _mapaCoresCategorias = {};
+
+function _corCategoria(cat) {
+  if (!_mapaCoresCategorias[cat]) {
+    const idx = Object.keys(_mapaCoresCategorias).length % _PALETA_CATEGORIAS.length;
+    _mapaCoresCategorias[cat] = _PALETA_CATEGORIAS[idx];
+  }
+  return _mapaCoresCategorias[cat];
+}
+
 function formatarData(iso) {
   if (!iso) return '—';
   try {
@@ -572,27 +595,47 @@ function renderizarTabelaSites() {
   tbody.innerHTML = '';
   if (!todosOsSites.length) { empty.style.display = 'block'; return; }
   empty.style.display = 'none';
+
+  // Agrupar sites por categoria (já chegam ordenados por categoria+nome do backend)
+  const grupos = {};
   todosOsSites.forEach(s => {
-    const tr = document.createElement('tr');
-    if (!s.ativo) tr.classList.add('inativo');
-    const statusBadge = s.ativo ? '<span class="badge badge-green">● ativo</span>' : '<span class="badge badge-gray">○ inativo</span>';
-    const alertaCell  = s.alerta_sem_dados ? '<span title="Nenhum valor coletado nos últimos 2 dias">⚠️</span>' : '';
-    const url  = (s.url  || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    const nome = (s.nome || '').replace(/'/g, "\\'");
-    const cat  = (s.categoria || '').replace(/'/g, "\\'");
-    const acaoBotao = s.ativo
-      ? `<button class="btn btn-danger btn-sm" onclick="confirmarDesativar(${s.id},'${nome}')">Desativar</button>`
-      : `<button class="btn btn-ghost btn-sm"  onclick="confirmarReativar(${s.id},'${nome}','${url}','${cat}')">Reativar</button>`;
-    tr.innerHTML = `
-      <td><strong>${s.nome}</strong></td>
-      <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><a href="${s.url}" target="_blank" rel="noopener">${s.url}</a></td>
-      <td>${s.categoria}</td>
-      <td>${statusBadge}</td>
-      <td style="color:var(--muted)">${formatarData(s.ultima_coleta)}</td>
-      <td style="color:var(--muted);font-variant-numeric:tabular-nums">${configAtual.scrape_time || '—'}</td>
-      <td>${alertaCell}</td>
-      <td id="acao-site-${s.id}">${acaoBotao}</td>`;
-    tbody.appendChild(tr);
+    const cat = s.categoria || 'Sem categoria';
+    if (!grupos[cat]) grupos[cat] = [];
+    grupos[cat].push(s);
+  });
+
+  // Renderizar cabeçalho de grupo + linhas de cada site
+  Object.keys(grupos).sort((a, b) => a.localeCompare(b, 'pt-BR')).forEach(cat => {
+    // Linha de cabeçalho da categoria com cor dinâmica
+    const cor = _corCategoria(cat);
+    const trHead = document.createElement('tr');
+    trHead.innerHTML = `<td colspan="8" style="background:${cor.bg};border-left:3px solid ${cor.border};color:${cor.text};font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;padding:8px 12px;">${cat}</td>`;
+    tbody.appendChild(trHead);
+
+    // Linhas dos sites da categoria (já ordenados alfabeticamente)
+    grupos[cat].forEach(s => {
+      const tr = document.createElement('tr');
+      if (!s.ativo) tr.classList.add('inativo');
+      const statusBadge = s.ativo ? '<span class="badge badge-green">● ativo</span>' : '<span class="badge badge-gray">○ inativo</span>';
+      const alertaCell  = s.alerta_sem_dados ? '<span title="Nenhum valor coletado nos últimos 2 dias">⚠️</span>' : '';
+      const url  = (s.url  || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+      const nome = (s.nome || '').replace(/'/g, "\\'");
+      const cat2 = (s.categoria || '').replace(/'/g, "\\'");
+      const acaoBotao = s.ativo
+        ? `<button class="btn btn-danger btn-sm" onclick="confirmarDesativar(${s.id},'${nome}')">Desativar</button>`
+        : `<button class="btn btn-ghost btn-sm"  onclick="confirmarReativar(${s.id},'${nome}','${url}','${cat2}')">Reativar</button>`;
+      tr.style.borderLeft = `3px solid ${cor.border}`;
+      tr.innerHTML = `
+        <td style="border-left:3px solid ${cor.border};background:${cor.bg}"><strong>${s.nome}</strong></td>
+        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><a href="${s.url}" target="_blank" rel="noopener">${s.url}</a></td>
+        <td>${s.categoria}</td>
+        <td>${statusBadge}</td>
+        <td style="color:var(--muted)">${formatarData(s.ultima_coleta)}</td>
+        <td style="color:var(--muted);font-variant-numeric:tabular-nums">${configAtual.scrape_time || '—'}</td>
+        <td>${alertaCell}</td>
+        <td id="acao-site-${s.id}">${acaoBotao}</td>`;
+      tbody.appendChild(tr);
+    });
   });
 }
 

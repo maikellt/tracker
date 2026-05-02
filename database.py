@@ -226,7 +226,7 @@ def obter_sites_ativos():
 
 
 def obter_todos_sites():
-    return _rows("SELECT * FROM sites ORDER BY id")
+    return _rows("SELECT * FROM sites ORDER BY categoria, nome COLLATE NOCASE")
 
 
 def obter_site_por_id(site_id: int):
