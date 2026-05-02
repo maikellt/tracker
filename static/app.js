@@ -235,6 +235,7 @@ async function carregarSitesBase() {
     selCat.innerHTML = '<option value="">Todas</option>';
     cats.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; selCat.appendChild(o); });
     if (valCat) selCat.value = valCat;
+    else selCat.value = 'Farmácia';
   } catch (e) { console.error('Erro ao carregar sites:', e); }
 }
 
