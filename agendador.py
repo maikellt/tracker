@@ -13,6 +13,7 @@ from scraper import coletar_site
 _config = {
     "scrape_time": os.getenv("SCRAPE_TIME", "06:00"),
     "scrape_interval_hours": int(os.getenv("SCRAPE_INTERVAL_HOURS", "24")),
+    "sync_interval_minutes": int(os.getenv("SYNC_INTERVAL_MINUTES", "30")),
     "timezone": "America/Sao_Paulo",
 }
 
@@ -28,6 +29,18 @@ def _agora_naive() -> datetime:
 def _log(mensagem: str):
     agora = _agora_naive().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{agora}] [AGENDADOR] {mensagem}", flush=True)
+
+
+def _executar_sync_turso():
+    """Job 3 — sincronização periódica Turso → SQLite local."""
+    from database import _sincronizar_do_turso, _sincronizar_configuracoes_do_turso
+    _log("Sincronização periódica Turso → local iniciada")
+    try:
+        _sincronizar_do_turso()
+        _sincronizar_configuracoes_do_turso()
+        _log("Sincronização periódica concluída")
+    except Exception as e:
+        _log("Erro na sincronização periódica: {}".format(e))
 
 
 def _executar_coleta_todos():
@@ -153,7 +166,15 @@ def _registrar_jobs():
         replace_existing=True,
     )
 
-    _log(f"Jobs registrados — horário fixo: {_config['scrape_time']}, intervalo: {_config['scrape_interval_hours']}h")
+    # Job 3 — sincronização periódica Turso → local
+    _scheduler.add_job(
+        _executar_sync_turso,
+        IntervalTrigger(minutes=_config["sync_interval_minutes"]),
+        id="job_sync_turso",
+        replace_existing=True,
+    )
+
+    _log(f"Jobs registrados — horário fixo: {_config['scrape_time']}, intervalo: {_config['scrape_interval_hours']}h, sync Turso: {_config['sync_interval_minutes']}min")
 
 
 def reconfigurar_agendador(novo_scrape_time: str | None, novo_intervalo_horas: int | None):
@@ -172,5 +193,6 @@ def obter_config() -> dict:
     return {
         "scrape_time": _config["scrape_time"],
         "scrape_interval_hours": _config["scrape_interval_hours"],
+        "sync_interval_minutes": _config["sync_interval_minutes"],
         "timezone": _config["timezone"],
     }

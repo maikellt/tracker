@@ -16,6 +16,7 @@ services:
     environment:
       - SCRAPE_TIME=06:00
       - SCRAPE_INTERVAL_HOURS=24
+      - SYNC_INTERVAL_MINUTES=30
       - TZ=America/Sao_Paulo
       - LOG_LEVEL=INFO
       - HOST=0.0.0.0
