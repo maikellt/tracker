@@ -101,6 +101,7 @@ function atualizarUI() {
 let todosOsSites = [];
 let todosParceiros = [];
 let acessoMap = {};
+let _filtroInicializado = false;
 
 async function carregarAcessoLocal() {
   try {
@@ -235,7 +236,8 @@ async function carregarSitesBase() {
     selCat.innerHTML = '<option value="">Todas</option>';
     cats.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; selCat.appendChild(o); });
     if (valCat) selCat.value = valCat;
-    else selCat.value = 'Farmácia';
+    else if (!_filtroInicializado) { selCat.value = 'Farmácia'; }
+    _filtroInicializado = true;
   } catch (e) { console.error('Erro ao carregar sites:', e); }
 }
 
