@@ -157,6 +157,16 @@
   </section>
   <section class="tab-panel" id="tab-sites" role="tabpanel" aria-labelledby="btn-sites">
     <div class="card">
+      <div class="card-header"><h2>Filtros</h2></div>
+      <div class="card-body">
+        <div class="filters">
+          <div class="field"><label for="filtro-sites-categoria">Categoria</label><select id="filtro-sites-categoria" onchange="aplicarFiltrosSites()"><option value="">Todas</option></select></div>
+          <div class="field" style="max-width:180px"><label for="filtro-sites-status">Status</label><select id="filtro-sites-status" onchange="aplicarFiltrosSites()"><option value="">Todos</option><option value="1">Ativo</option><option value="0">Inativo</option></select></div>
+          <div class="field" style="max-width:120px;display:flex;align-items:flex-end"><button class="btn btn-ghost btn-sm" onclick="limparFiltrosSites()" style="width:100%">Limpar</button></div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
       <div class="card-header"><h2>Sites monitorados</h2><button class="btn btn-ghost btn-sm" onclick="carregarSites()">↻ Atualizar</button></div>
       <div style="overflow-x:auto">
         <table>

@@ -582,23 +582,32 @@ async function carregarSites() {
   try {
     const res = await fetch(`${API}/sites`);
     todosOsSites = await res.json();
-    renderizarTabelaSites();
     const cats = [...new Set(todosOsSites.map(s => s.categoria))];
     const dl = document.getElementById('sugestoes-categoria');
     if (dl) { dl.innerHTML = ''; cats.forEach(c => { const o = document.createElement('option'); o.value = c; dl.appendChild(o); }); }
+    // Popula filtro de categorias da aba Sites preservando seleção atual
+    const selSitesCat = document.getElementById('filtro-sites-categoria');
+    if (selSitesCat) {
+      const valAtual = selSitesCat.value;
+      selSitesCat.innerHTML = '<option value="">Todas</option>';
+      cats.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; selSitesCat.appendChild(o); });
+      if (valAtual) selSitesCat.value = valAtual;
+    }
+    aplicarFiltrosSites();
   } catch (e) { console.error('Erro ao carregar sites:', e); }
 }
 
-function renderizarTabelaSites() {
+function renderizarTabelaSites(lista) {
+  lista = lista !== undefined ? lista : todosOsSites;
   const tbody = document.getElementById('tabela-sites');
   const empty = document.getElementById('empty-sites');
   tbody.innerHTML = '';
-  if (!todosOsSites.length) { empty.style.display = 'block'; return; }
+  if (!lista.length) { empty.style.display = 'block'; return; }
   empty.style.display = 'none';
 
   // Agrupar sites por categoria (já chegam ordenados por categoria+nome do backend)
   const grupos = {};
-  todosOsSites.forEach(s => {
+  lista.forEach(s => {
     const cat = s.categoria || 'Sem categoria';
     if (!grupos[cat]) grupos[cat] = [];
     grupos[cat].push(s);
@@ -692,6 +701,24 @@ async function cadastrarSite(event) {
     await carregarSites();
     setTimeout(carregarSites, 10000);
   } catch (e) { mostrarFeedback(fb, 'err', 'Erro de conexão: ' + e.message); }
+}
+
+function aplicarFiltrosSites() {
+  const categoria = document.getElementById('filtro-sites-categoria')?.value || '';
+  const status    = document.getElementById('filtro-sites-status')?.value;
+  let lista = todosOsSites;
+  if (categoria) lista = lista.filter(s => s.categoria === categoria);
+  if (status === '1') lista = lista.filter(s =>  s.ativo);
+  if (status === '0') lista = lista.filter(s => !s.ativo);
+  renderizarTabelaSites(lista);
+}
+
+function limparFiltrosSites() {
+  const selCat = document.getElementById('filtro-sites-categoria');
+  const selSts = document.getElementById('filtro-sites-status');
+  if (selCat) selCat.value = '';
+  if (selSts) selSts.value = '';
+  renderizarTabelaSites();
 }
 
 async function carregarConfig() {
