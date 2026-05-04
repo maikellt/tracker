@@ -105,6 +105,24 @@ DDL = [
         chave TEXT PRIMARY KEY,
         valor TEXT NOT NULL
     )""",
+    """CREATE TABLE IF NOT EXISTS produtos (
+        id           INTEGER PRIMARY KEY,
+        nome         TEXT NOT NULL,
+        url          TEXT NOT NULL UNIQUE,
+        categoria    TEXT NOT NULL,
+        dosagem      TEXT,
+        quantidade   INTEGER,
+        unidade_qty  TEXT DEFAULT 'comprimidos',
+        ativo        INTEGER DEFAULT 1,
+        bloqueado    INTEGER DEFAULT 0,
+        preco_manual REAL
+    )""",
+    """CREATE TABLE IF NOT EXISTS precos_produtos (
+        id           INTEGER PRIMARY KEY,
+        produto_id   INTEGER REFERENCES produtos(id),
+        preco        REAL,
+        capturado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
 ]
 
 
@@ -173,6 +191,34 @@ def _sincronizar_do_turso():
     logger.info(f"[SYNC] {len(erros)} erro(s) sincronizado(s)")
     # Sincronizar configurações (preferências, notificações, limiares)
     _sincronizar_configuracoes_do_turso()
+    # Produtos
+    prods = _rows_turso("SELECT id, nome, url, categoria, dosagem, quantidade, unidade_qty, ativo FROM produtos")
+    for p in prods:
+        _local_write(
+            "INSERT OR REPLACE INTO produtos (id, nome, url, categoria, dosagem, quantidade, unidade_qty, ativo) VALUES (?,?,?,?,?,?,?,?)",
+            (p["id"], p["nome"], p["url"], p["categoria"], p["dosagem"], p["quantidade"], p["unidade_qty"], p["ativo"]),
+        )
+    logger.info(f"[SYNC] {len(prods)} produto(s) sincronizado(s)")
+
+    # Preços de produtos em lotes
+    total_pp = (_rows_turso("SELECT COUNT(*) as n FROM precos_produtos") or [{"n": 0}])[0].get("n", 0)
+    off_pp, sync_pp = 0, 0
+    while True:
+        rows_pp = _rows_turso(
+            "SELECT id, produto_id, preco, capturado_em FROM precos_produtos ORDER BY id LIMIT ? OFFSET ?",
+            (LOTE, off_pp),
+        )
+        if not rows_pp:
+            break
+        for r in rows_pp:
+            _local_write(
+                "INSERT OR REPLACE INTO precos_produtos (id, produto_id, preco, capturado_em) VALUES (?,?,?,?)",
+                (r["id"], r["produto_id"], r["preco"], r["capturado_em"]),
+            )
+        sync_pp += len(rows_pp)
+        off_pp += LOTE
+    logger.info(f"[SYNC] {sync_pp}/{total_pp} preco(s) de produto(s) sincronizado(s)")
+
     logger.info("[SYNC] Sincronização concluída")
 
 
@@ -460,3 +506,155 @@ def verificar_alerta_sem_dados(site_id: int) -> bool:
         (site_id,),
     )
     return (row["total"] if row else 0) == 0
+
+
+# ── Produtos ──────────────────────────────────────────────────────────────────
+
+def inserir_produto(nome: str, url: str, categoria: str, dosagem, quantidade, unidade_qty: str) -> int:
+    result = _local_write(
+        "INSERT INTO produtos (nome, url, categoria, dosagem, quantidade, unidade_qty) VALUES (?,?,?,?,?,?)",
+        (nome, url, categoria, dosagem, quantidade, unidade_qty),
+    )
+    pid = result.lastrowid
+    _turso_write_async(
+        "INSERT OR IGNORE INTO produtos (id, nome, url, categoria, dosagem, quantidade, unidade_qty) VALUES (?,?,?,?,?,?,?)",
+        (pid, nome, url, categoria, dosagem, quantidade, unidade_qty),
+    )
+    return pid
+
+
+def reativar_produto(produto_id: int, nome: str, categoria: str, dosagem, quantidade, unidade_qty: str):
+    _local_write(
+        "UPDATE produtos SET ativo=1, nome=?, categoria=?, dosagem=?, quantidade=?, unidade_qty=? WHERE id=?",
+        (nome, categoria, dosagem, quantidade, unidade_qty, produto_id),
+    )
+    _turso_write_async(
+        "UPDATE produtos SET ativo=1, nome=?, categoria=?, dosagem=?, quantidade=?, unidade_qty=? WHERE id=?",
+        (nome, categoria, dosagem, quantidade, unidade_qty, produto_id),
+    )
+
+
+def obter_todos_produtos_ativos():
+    return _rows("SELECT * FROM produtos WHERE ativo=1 ORDER BY nome, quantidade")
+
+
+def obter_todos_produtos():
+    return _rows("SELECT * FROM produtos ORDER BY nome, quantidade")
+
+
+def obter_produto_por_id(produto_id: int):
+    return _row("SELECT * FROM produtos WHERE id=?", (produto_id,))
+
+
+def obter_produto_por_url(url: str):
+    return _row("SELECT * FROM produtos WHERE url=?", (url,))
+
+
+def desativar_produto(produto_id: int):
+    _local_write("UPDATE produtos SET ativo=0 WHERE id=?", (produto_id,))
+    _turso_write_async("UPDATE produtos SET ativo=0 WHERE id=?", (produto_id,))
+
+
+def salvar_preco_produto(produto_id: int, preco: float):
+    result = _local_write(
+        "INSERT INTO precos_produtos (produto_id, preco) VALUES (?,?)",
+        (produto_id, preco),
+    )
+    pid = result.lastrowid
+    row = _row("SELECT capturado_em FROM precos_produtos WHERE id=?", (pid,))
+    cap = row["capturado_em"] if row else None
+    _turso_write_async(
+        "INSERT INTO precos_produtos (id, produto_id, preco, capturado_em) VALUES (?,?,?,?)",
+        (pid, produto_id, preco, cap),
+    )
+
+
+def obter_ultimo_preco_produto(produto_id: int):
+    return _row(
+        "SELECT preco, capturado_em FROM precos_produtos WHERE produto_id=? ORDER BY capturado_em DESC LIMIT 1",
+        (produto_id,),
+    )
+
+
+def mapear_dominio_para_site_cashback(url_produto: str) -> dict:
+    """
+    Mapeia o domínio do produto ao site monitorado e retorna o melhor cashback
+    entre os parceiros que o usuario marcou como 'tenho acesso'.
+    Usa a URL do comparemania como chave de correspondencia:
+      cashback-pague-menos  <->  paguemenos.com.br
+    """
+    import re as _re
+    from urllib.parse import urlparse
+
+    vazio = {"site_id": None, "site_nome": None, "cashback_pct": 0.0, "parceiro": None}
+
+    try:
+        dominio = urlparse(url_produto).netloc.lower().replace("www.", "")
+        # Remove TLD: paguemenos.com.br → paguemenos
+        for tld in (".com.br", ".com", ".net.br", ".net", ".org.br", ".org", ".br"):
+            if dominio.endswith(tld):
+                dominio = dominio[: -len(tld)]
+                break
+        dominio_base = dominio
+    except Exception:
+        return vazio
+
+    site_match = None
+    for site in obter_todos_sites():
+        if not site["ativo"]:
+            continue
+        m = _re.search(r"/cashback-(.+?)(?:/|$)", site["url"].lower())
+        if not m:
+            continue
+        chave = m.group(1).replace("-", "")
+        if dominio_base in chave or chave in dominio_base:
+            site_match = site
+            break
+        # Correspondencia parcial: qualquer palavra >=4 chars do dominio aparece na chave
+        if any(p in chave for p in _re.findall(r"[a-z]{4,}", dominio_base)):
+            site_match = site
+            break
+
+    if not site_match:
+        return vazio
+
+    preferencias = obter_configuracao("preferencias") or {}
+    parceiros     = obter_parceiros_site(site_match["id"])
+
+    # Apenas cashbacks de parceiros com acesso marcado pelo usuario
+    disponiveis = [
+        p for p in parceiros.get("cashback", [])
+        if p["status"] == "ativo"
+        and p["ultimo_valor"] is not None
+        and preferencias.get(p["parceiro"], False)
+    ]
+
+    if not disponiveis:
+        return {"site_id": site_match["id"], "site_nome": site_match["nome"],
+                "cashback_pct": 0.0, "parceiro": None}
+
+    melhor = max(disponiveis, key=lambda p: p["ultimo_valor"])
+    return {
+        "site_id":      site_match["id"],
+        "site_nome":    site_match["nome"],
+        "cashback_pct": melhor["ultimo_valor"],
+        "parceiro":     melhor["parceiro"],
+    }
+
+
+def marcar_produto_bloqueado(produto_id: int, bloqueado: bool):
+    _local_write("UPDATE produtos SET bloqueado=? WHERE id=?", (1 if bloqueado else 0, produto_id))
+    _turso_write_async("UPDATE produtos SET bloqueado=? WHERE id=?", (1 if bloqueado else 0, produto_id))
+
+
+def salvar_preco_manual(produto_id: int, preco: float):
+    """Salva preço inserido manualmente e limpa flag de bloqueio."""
+    _local_write("UPDATE produtos SET preco_manual=?, bloqueado=0 WHERE id=?", (preco, produto_id))
+    _turso_write_async("UPDATE produtos SET preco_manual=?, bloqueado=0 WHERE id=?", (preco, produto_id))
+    # Registra também como snapshot normal para aparecer no histórico
+    salvar_preco_produto(produto_id, preco)
+
+
+def atualizar_url_produto(produto_id: int, url: str):
+    _local_write("UPDATE produtos SET url=?, bloqueado=0 WHERE id=?", (url, produto_id))
+    _turso_write_async("UPDATE produtos SET url=?, bloqueado=0 WHERE id=?", (url, produto_id))

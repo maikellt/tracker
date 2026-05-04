@@ -14,6 +14,7 @@ _config = {
     "scrape_time": os.getenv("SCRAPE_TIME", "06:00"),
     "scrape_interval_hours": int(os.getenv("SCRAPE_INTERVAL_HOURS", "24")),
     "sync_interval_minutes": int(os.getenv("SYNC_INTERVAL_MINUTES", "30")),
+    "produto_scrape_time": os.getenv("PRODUTO_SCRAPE_TIME", "08:00"),
     "timezone": "America/Sao_Paulo",
 }
 
@@ -125,6 +126,13 @@ def _executar_coleta_por_intervalo():
         _disparou_intervalo = True
 
 
+def _executar_coleta_produtos():
+    """Job 4 — coleta preços de todos os produtos ativos (sequencial para economizar memória)."""
+    from scraper_produtos import coletar_todos_produtos
+    _log("Job de produtos disparado")
+    threading.Thread(target=coletar_todos_produtos, daemon=True).start()
+
+
 def iniciar_agendador():
     global _scheduler
     with _lock:
@@ -174,15 +182,26 @@ def _registrar_jobs():
         replace_existing=True,
     )
 
-    _log(f"Jobs registrados — horário fixo: {_config['scrape_time']}, intervalo: {_config['scrape_interval_hours']}h, sync Turso: {_config['sync_interval_minutes']}min")
+    # Job 4 — coleta de preços de produtos (horário configurável, padrão 08:00)
+    hora_p, minuto_p = map(int, _config["produto_scrape_time"].split(":"))
+    _scheduler.add_job(
+        _executar_coleta_produtos,
+        CronTrigger(hour=hora_p, minute=minuto_p, timezone=_config["timezone"]),
+        id="job_produtos",
+        replace_existing=True,
+    )
+
+    _log(f"Jobs registrados — fixo: {_config['scrape_time']}, intervalo: {_config['scrape_interval_hours']}h, sync: {_config['sync_interval_minutes']}min, produtos: {_config['produto_scrape_time']}")
 
 
-def reconfigurar_agendador(novo_scrape_time: str | None, novo_intervalo_horas: int | None):
+def reconfigurar_agendador(novo_scrape_time: str | None, novo_intervalo_horas: int | None, novo_produto_scrape_time: str | None = None):
     with _lock:
         if novo_scrape_time:
             _config["scrape_time"] = novo_scrape_time
         if novo_intervalo_horas is not None:
             _config["scrape_interval_hours"] = novo_intervalo_horas
+        if novo_produto_scrape_time:
+            _config["produto_scrape_time"] = novo_produto_scrape_time
 
         if _scheduler and _scheduler.running:
             _registrar_jobs()
@@ -194,5 +213,6 @@ def obter_config() -> dict:
         "scrape_time": _config["scrape_time"],
         "scrape_interval_hours": _config["scrape_interval_hours"],
         "sync_interval_minutes": _config["sync_interval_minutes"],
+        "produto_scrape_time": _config["produto_scrape_time"],
         "timezone": _config["timezone"],
     }

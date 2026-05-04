@@ -113,7 +113,8 @@
   <nav role="tablist" aria-label="Navegação principal">
     <button class="tab-btn active" role="tab" aria-selected="true"  aria-controls="tab-painel" id="btn-painel" onclick="mudarAba('painel')">&#128202; <span>Painel</span></button>
     <button class="tab-btn"        role="tab" aria-selected="false" aria-controls="tab-sites"  id="btn-sites"  onclick="mudarAba('sites')">&#127760; <span>Sites</span></button>
-    <button class="tab-btn"        role="tab" aria-selected="false" aria-controls="tab-config" id="btn-config" onclick="mudarAba('config')">&#9881;&#65039; <span>Configurações</span></button>
+    <button class="tab-btn"        role="tab" aria-selected="false" aria-controls="tab-config"   id="btn-config"   onclick="mudarAba('config')">&#9881;&#65039; <span>Configurações</span></button>
+    <button class="tab-btn"        role="tab" aria-selected="false" aria-controls="tab-produtos" id="btn-produtos" onclick="mudarAba('produtos')">&#128722; <span>Produtos</span></button>
   </nav>
   <button id="btn-acesso" class="btn btn-ghost btn-sm" style="margin-left:auto;font-size:12px">Login</button>
 </header>
@@ -200,6 +201,7 @@
         <form class="config-form" id="form-config" onsubmit="salvarConfig(event)">
           <div class="field"><label for="cfg-horario">Horário fixo diário (SCRAPE_TIME)</label><input id="cfg-horario" type="time" step="60" /></div>
           <div class="field"><label for="cfg-intervalo">Intervalo de re-execução em horas (mínimo: 1)</label><input id="cfg-intervalo" type="number" min="1" max="168" step="1" /></div>
+          <div class="field"><label for="cfg-horario-produto">Horário coleta de produtos (PRODUTO_SCRAPE_TIME)</label><input id="cfg-horario-produto" type="time" step="60" /></div>
           <div><button type="submit" class="btn btn-primary">Salvar configurações</button><div id="feedback-config" style="margin-top:8px"></div></div>
         </form>
       </div>
@@ -265,6 +267,65 @@
       </div>
       <div id="empty-limiares" class="empty" style="display:none">Nenhum limiar configurado. Clique em "+ Adicionar".</div>
       <div id="feedback-limiares" style="padding:8px 16px"></div>
+    </div>
+  </section>
+  <section class="tab-panel" id="tab-produtos" role="tabpanel" aria-labelledby="btn-produtos">
+    <!-- Comparativo: cards gerados pelo JS -->
+    <div id="container-comparativo"></div>
+    <div id="empty-comparativo" class="empty" style="display:none">Nenhum produto cadastrado ainda. Use o formulário abaixo para adicionar.</div>
+
+    <!-- Cadastrar produto -->
+    <div class="card">
+      <div class="card-header"><h2>Cadastrar produto</h2></div>
+      <div class="card-body">
+        <form id="form-produto" onsubmit="cadastrarProduto(event)">
+          <div class="form-grid">
+            <div>
+              <label for="prod-nome">Nome do produto *</label>
+              <input id="prod-nome" type="text" placeholder="Ex: Rosucor 10mg" list="sugestoes-prod-nome" required oninput="atualizarSugestoesFarmacia(this.value)" onchange="atualizarSugestoesFarmacia(this.value)">
+              <datalist id="sugestoes-prod-nome"></datalist>
+            </div>
+            <div>
+              <label for="prod-url">URL do produto *</label>
+              <input id="prod-url" type="url" placeholder="https://..." required>
+            </div>
+            <div>
+              <label for="prod-categoria">Categoria *</label>
+              <input id="prod-categoria" type="text" placeholder="Ex: Farmácia" list="sugestoes-prod-cat" required oninput="toggleCamposFarmacia(this.value)">
+              <datalist id="sugestoes-prod-cat"></datalist>
+            </div>
+          </div>
+          <div id="campos-farmacia" style="display:none;margin-top:12px">
+            <div class="form-grid">
+              <div><label for="prod-dosagem">Dosagem</label><input id="prod-dosagem" type="text" placeholder="Ex: 10 mg" list="sugestoes-dosagem"><datalist id="sugestoes-dosagem"></datalist></div>
+              <div><label for="prod-quantidade">Quantidade</label><input id="prod-quantidade" type="text" placeholder="Ex: 60" list="sugestoes-quantidade"><datalist id="sugestoes-quantidade"></datalist></div>
+              <div><label for="prod-unidade">Unidade</label><input id="prod-unidade" type="text" value="comprimidos"></div>
+            </div>
+          </div>
+          <div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button type="submit" class="btn btn-primary">Cadastrar produto</button>
+            <div id="feedback-produto"></div>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Lista de produtos -->
+    <div class="card">
+      <div class="card-header">
+        <h2>Produtos cadastrados</h2>
+        <button class="btn btn-ghost btn-sm" onclick="inicializarProdutos()">↻ Atualizar</button>
+      </div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr>
+            <th>Nome</th><th>Site</th><th>Dosagem</th><th>Qtd</th>
+            <th>Último preço</th><th>Última coleta</th><th></th>
+          </tr></thead>
+          <tbody id="tabela-produtos"></tbody>
+        </table>
+      </div>
+      <div id="empty-lista-produtos" class="empty" style="display:none">Nenhum produto cadastrado.</div>
     </div>
   </section>
 </main>

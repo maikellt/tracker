@@ -7,3 +7,4 @@ apscheduler==3.10.4
 python-dotenv==1.0.0
 python-jose[cryptography]==3.3.0
 libsql-experimental==0.0.55
+playwright==1.44.0

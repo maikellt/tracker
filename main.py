@@ -30,7 +30,22 @@ from database import (
     verificar_alerta_sem_dados,
     obter_configuracao,
     salvar_configuracao,
+    # Produtos
+    inserir_produto,
+    reativar_produto,
+    obter_todos_produtos,
+    obter_todos_produtos_ativos,
+    obter_produto_por_id,
+    obter_produto_por_url,
+    desativar_produto,
+    salvar_preco_produto,
+    obter_ultimo_preco_produto,
+    mapear_dominio_para_site_cashback,
+    marcar_produto_bloqueado,
+    salvar_preco_manual,
+    atualizar_url_produto,
 )
+from scraper_produtos import coletar_preco_produto
 from scraper import coletar_site
 from notificador import carregar_config_notif, salvar_config_notif, enviar_telegram, enviar_email, formatar_mensagem_teste
 from agendador import iniciar_agendador, parar_agendador, reconfigurar_agendador, obter_config
@@ -189,6 +204,16 @@ class SiteEntrada(BaseModel):
 class ConfigEntrada(BaseModel):
     scrape_time: str | None = None
     scrape_interval_hours: int | None = None
+    produto_scrape_time: str | None = None
+
+
+class ProdutoEntrada(BaseModel):
+    nome: str
+    url: str
+    categoria: str
+    dosagem: str | None = None
+    quantidade: int | None = None
+    unidade_qty: str = "comprimidos"
 
 
 # ── Sites ─────────────────────────────────────────────────────────────────────
@@ -274,6 +299,142 @@ def max_site(site_id: int, dias: int = 30):
     return obter_max_site(site_id, dias=dias)
 
 
+# ── Produtos ─────────────────────────────────────────────────────────────────
+
+@app.get("/produtos/comparativo", dependencies=[Depends(_verificar_token)])
+def comparativo_produtos():
+    """Agrupa produtos por nome, calcula cashback e ordena por preço unitário."""
+    grupos: dict = {}
+    for p in obter_todos_produtos_ativos():
+        ultimo   = obter_ultimo_preco_produto(p["id"])
+        cashback = mapear_dominio_para_site_cashback(p["url"])
+        preco    = ultimo["preco"] if ultimo else None
+        cb_pct   = cashback["cashback_pct"]
+        preco_final  = round(preco * (1 - cb_pct / 100), 2) if preco is not None else None
+        quantidade   = p["quantidade"] or 1
+        preco_unit   = round(preco_final / quantidade, 4) if preco_final is not None else None
+
+        item = {
+            "id":               p["id"],
+            "url":              p["url"],
+            "dosagem":          p["dosagem"],
+            "quantidade":       p["quantidade"],
+            "unidade_qty":      p["unidade_qty"],
+            "preco":            preco,
+            "preco_final":      preco_final,
+            "preco_unitario":   preco_unit,
+            "cashback_pct":     cb_pct,
+            "cashback_parceiro": cashback["parceiro"],
+            "site_nome":        cashback["site_nome"],
+            "ultima_coleta":    ultimo["capturado_em"] if ultimo else None,
+        }
+        key = p["nome"]
+        if key not in grupos:
+            grupos[key] = {"nome": p["nome"], "categoria": p["categoria"], "itens": []}
+        grupos[key]["itens"].append(item)
+
+    for g in grupos.values():
+        g["itens"].sort(key=lambda x: (x["preco_unitario"] is None, x["preco_unitario"] or 0))
+
+    return list(grupos.values())
+
+
+@app.get("/produtos", dependencies=[Depends(_verificar_token)])
+def listar_produtos():
+    resultado = []
+    for p in obter_todos_produtos():
+        ultimo   = obter_ultimo_preco_produto(p["id"])
+        cashback = mapear_dominio_para_site_cashback(p["url"])
+        preco    = ultimo["preco"] if ultimo else None
+        cb_pct   = cashback["cashback_pct"]
+        preco_f  = round(preco * (1 - cb_pct / 100), 2) if preco is not None else None
+        preco_u  = round(preco_f / (p["quantidade"] or 1), 4) if preco_f is not None else None
+        resultado.append({
+            **p,
+            "preco":              preco,
+            "preco_final":        preco_f,
+            "preco_unitario":     preco_u,
+            "cashback_pct":       cb_pct,
+            "cashback_parceiro":  cashback["parceiro"],
+            "site_nome_cashback": cashback["site_nome"],
+            "ultima_coleta":      ultimo["capturado_em"] if ultimo else None,
+            "bloqueado":          bool(p.get("bloqueado")),
+        })
+    return resultado
+
+
+@app.post("/produtos", status_code=201, dependencies=[Depends(_verificar_token)])
+def cadastrar_produto(dados: ProdutoEntrada, response: Response):
+    existente = obter_produto_por_url(dados.url)
+    if existente:
+        if existente["ativo"]:
+            raise HTTPException(status_code=409, detail="Este produto já está cadastrado")
+        reativar_produto(existente["id"], dados.nome, dados.categoria,
+                         dados.dosagem, dados.quantidade, dados.unidade_qty)
+        produto_id = existente["id"]
+        response.status_code = 200
+    else:
+        produto_id = inserir_produto(dados.nome, dados.url, dados.categoria,
+                                     dados.dosagem, dados.quantidade, dados.unidade_qty)
+
+    threading.Thread(
+        target=coletar_preco_produto,
+        args=(produto_id, dados.url, dados.nome),
+        daemon=True,
+    ).start()
+
+    return obter_produto_por_id(produto_id)
+
+
+@app.delete("/produtos/{produto_id}", status_code=204, dependencies=[Depends(_verificar_token)])
+def remover_produto(produto_id: int):
+    p = obter_produto_por_id(produto_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Produto não encontrado")
+    desativar_produto(produto_id)
+    return Response(status_code=204)
+
+
+@app.patch("/produtos/{produto_id}", dependencies=[Depends(_verificar_token)])
+def atualizar_produto(produto_id: int, dados: dict):
+    p = obter_produto_por_id(produto_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Produto não encontrado")
+    if "url" in dados and dados["url"]:
+        atualizar_url_produto(produto_id, dados["url"].strip())
+        threading.Thread(
+            target=coletar_preco_produto,
+            args=(produto_id, dados["url"].strip(), p["nome"]),
+            daemon=True,
+        ).start()
+    return obter_produto_por_id(produto_id)
+
+
+@app.put("/produtos/{produto_id}/preco", dependencies=[Depends(_verificar_token)])
+def salvar_preco_produto_manual(produto_id: int, dados: dict):
+    p = obter_produto_por_id(produto_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Produto não encontrado")
+    preco = dados.get("preco")
+    if preco is None or float(preco) <= 0:
+        raise HTTPException(status_code=422, detail="Preco invalido")
+    salvar_preco_manual(produto_id, float(preco))
+    return {"ok": True}
+
+
+@app.post("/produtos/{produto_id}/coletar", dependencies=[Depends(_verificar_token)])
+def coletar_produto_agora(produto_id: int):
+    p = obter_produto_por_id(produto_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Produto não encontrado")
+    threading.Thread(
+        target=coletar_preco_produto,
+        args=(produto_id, p["url"], p["nome"]),
+        daemon=True,
+    ).start()
+    return {"status": "coleta_iniciada"}
+
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 @app.get("/config")
@@ -286,6 +447,7 @@ def atualizar_config(dados: ConfigEntrada):
     reconfigurar_agendador(
         novo_scrape_time=dados.scrape_time,
         novo_intervalo_horas=dados.scrape_interval_hours,
+        novo_produto_scrape_time=dados.produto_scrape_time,
     )
     return obter_config()
 

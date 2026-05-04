@@ -203,6 +203,7 @@ function mudarAba(aba) {
   if (aba === 'painel') inicializarPainel();
   if (aba === 'sites')  carregarSites();
   if (aba === 'config') { carregarConfig(); renderizarAcessos(); carregarNotificacoes(); }
+  if (aba === 'produtos') inicializarProdutos();
 }
 
 async function inicializar() {
@@ -727,6 +728,7 @@ async function carregarConfig() {
     configAtual = await res.json();
     document.getElementById('cfg-horario').value   = configAtual.scrape_time || '';
     document.getElementById('cfg-intervalo').value = configAtual.scrape_interval_hours || 24;
+    document.getElementById('cfg-horario-produto').value = configAtual.produto_scrape_time || '08:00';
     renderizarInfoSistema();
   } catch (e) { console.error('Erro ao carregar config:', e); }
 }
@@ -737,18 +739,20 @@ function renderizarInfoSistema() {
   el.innerHTML = `
     <div><span style="color:var(--muted)">Horário fixo:</span> <strong>${configAtual.scrape_time || '—'}</strong></div>
     <div><span style="color:var(--muted)">Intervalo:</span> <strong>${configAtual.scrape_interval_hours || '—'}h</strong></div>
-    <div><span style="color:var(--muted)">Fuso horário:</span> <strong>${configAtual.timezone || 'America/Sao_Paulo'}</strong></div>`;
+    <div><span style="color:var(--muted)">Fuso horário:</span> <strong>${configAtual.timezone || 'America/Sao_Paulo'}</strong></div>
+    <div><span style="color:var(--muted)">Coleta de produtos:</span> <strong>${configAtual.produto_scrape_time || '08:00'}</strong></div>`;
 }
 
 async function salvarConfig(event) {
   event.preventDefault();
   const scrape_time           = document.getElementById('cfg-horario').value;
   const scrape_interval_hours = parseInt(document.getElementById('cfg-intervalo').value, 10);
+  const produto_scrape_time = document.getElementById('cfg-horario-produto').value;
   const fb = 'feedback-config';
   if (!scrape_time) { mostrarFeedback(fb, 'err', 'Informe o horário fixo.'); return; }
   if (isNaN(scrape_interval_hours) || scrape_interval_hours < 1) { mostrarFeedback(fb, 'err', 'Intervalo deve ser no mínimo 1 hora.'); return; }
   try {
-    const res = await fetch(`${API}/config`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scrape_time, scrape_interval_hours }) });
+    const res = await fetch(`${API}/config`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scrape_time, scrape_interval_hours, produto_scrape_time }) });
     if (!res.ok) { const e = await res.json(); mostrarFeedback(fb, 'err', e.detail || 'Erro ao salvar.'); return; }
     configAtual = await res.json();
     renderizarInfoSistema();
@@ -907,3 +911,391 @@ document.addEventListener('DOMContentLoaded', () => {
   atualizarUI();
   inicializarApp();
 });
+
+// ── Produtos ──────────────────────────────────────────────────────────────────
+
+let todosProdutos = [];
+
+function toggleCamposFarmacia(cat) {
+  const el = document.getElementById('campos-farmacia');
+  if (el) el.style.display = cat.trim().toLowerCase() === 'farmácia' ? 'block' : 'none';
+}
+
+async function inicializarProdutos() {
+  await Promise.all([carregarProdutos(), carregarComparativo()]);
+  // Sugestões de nome
+  const nomes = [...new Set(todosProdutos.map(p => p.nome))];
+  const dlNome = document.getElementById('sugestoes-prod-nome');
+  if (dlNome) { dlNome.innerHTML = ''; nomes.forEach(n => { const o = document.createElement('option'); o.value = n; dlNome.appendChild(o); }); }
+  // Sugestões de categoria
+  const cats = [...new Set(todosOsSites.map(s => s.categoria).filter(Boolean))];
+  const dlCat = document.getElementById('sugestoes-prod-cat');
+  if (dlCat) { dlCat.innerHTML = ''; cats.forEach(c => { const o = document.createElement('option'); o.value = c; dlCat.appendChild(o); }); }
+  // Dosagem e quantidade — iniciar com todos os valores, filtrar conforme nome é digitado
+  atualizarSugestoesFarmacia('');
+}
+
+async function carregarProdutos() {
+  try {
+    const res = await fetch(`${API}/produtos`);
+    todosProdutos = await res.json();
+    renderizarTabelaProdutos();
+  } catch (e) { console.error('Erro ao carregar produtos:', e); }
+}
+
+function renderizarTabelaProdutos() {
+  const tbody = document.getElementById('tabela-produtos');
+  const empty = document.getElementById('empty-lista-produtos');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  const lista = todosProdutos.filter(p => p.ativo);
+  if (!lista.length) { if (empty) empty.style.display = 'block'; return; }
+  if (empty) empty.style.display = 'none';
+
+  // Agrupar por nome
+  const grupos = {};
+  lista.forEach(p => { if (!grupos[p.nome]) grupos[p.nome] = []; grupos[p.nome].push(p); });
+
+  Object.entries(grupos).forEach(([nome, itens]) => {
+    const gid  = nome.replace(/[^a-z0-9]/gi, '_');
+    const bloq = itens.filter(p => p.bloqueado).length;
+    const semP = itens.filter(p => p.preco == null && !p.bloqueado).length;
+    const badge = bloq > 0
+      ? `<span class="badge badge-red" style="font-size:10px">⚠️ ${bloq} bloqueado(s)</span>`
+      : semP > 0
+        ? `<span class="badge badge-warn" style="font-size:10px">⏳ aguardando</span>`
+        : `<span class="badge badge-green" style="font-size:10px">✓ coletados</span>`;
+
+    const trG = document.createElement('tr');
+    trG.style.cursor = 'pointer';
+    trG.innerHTML = `
+      <td colspan="4" onclick="toggleGrupoProduto('${gid}')">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span id="ico-grupo-${gid}" style="font-size:11px;color:var(--muted)">▶</span>
+          <strong>${nome}</strong>
+          <span style="font-size:12px;color:var(--muted)">${itens.length} URL(s)</span>
+          ${badge}
+        </div>
+      </td>
+      <td colspan="3" style="text-align:right">
+        <button class="btn btn-ghost btn-sm"
+          onclick="event.stopPropagation();coletarGrupo('${nome.replace(/'/g,"\'")}')">
+          ↻ Coletar todos
+        </button>
+      </td>`;
+    tbody.appendChild(trG);
+
+    itens.forEach(p => {
+      const nomeEsc  = (p.nome||'').replace(/'/g,"\'");
+      const precoTxt = p.preco != null
+        ? `R$ ${Number(p.preco).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})}`
+        : p.bloqueado
+          ? `<span style="color:var(--error);font-size:11px">⚠️ Bloqueado</span>`
+          : '<span style="color:var(--warn);font-size:11px">Aguardando</span>';
+      const tr = document.createElement('tr');
+      tr.className = `detalhe-grupo-${gid}`;
+      tr.style.cssText = 'display:none;background:var(--surface2)';
+      tr.innerHTML = `
+        <td style="padding-left:28px;font-size:12px;color:var(--muted)">
+          ${p.site_nome_cashback || extrairDominioCurto(p.url)}
+        </td>
+        <td style="color:var(--muted);font-size:12px">${p.dosagem||'—'}</td>
+        <td style="font-size:12px">${p.quantidade ? p.quantidade+' '+(p.unidade_qty||'') : '—'}</td>
+        <td style="font-variant-numeric:tabular-nums;font-size:12px">${precoTxt}</td>
+        <td style="color:var(--muted);font-size:11px">${formatarData(p.ultima_coleta)}</td>
+        <td colspan="2" style="display:flex;gap:4px;flex-wrap:wrap">
+          ${p.bloqueado ? `<button class="btn btn-sm" style="font-size:11px;background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn)" onclick="abrirInputPrecoManual(${p.id},'${nomeEsc}','${p.url}')">✏️</button>` : ''}
+          <button class="btn btn-ghost btn-sm" style="font-size:11px" title="Editar URL" onclick="abrirEdicaoUrl(${p.id},'${nomeEsc}','${p.url}')">✎</button>
+          <button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="coletarProdutoAgora(${p.id},'${nomeEsc}')">↻</button>
+          <button class="btn btn-danger btn-sm" style="font-size:11px" onclick="confirmarDesativarProduto(${p.id},'${nomeEsc}')">✕</button>
+        </td>`;
+      tbody.appendChild(tr);
+    });
+  });
+}
+
+function toggleGrupoProduto(gid) {
+  const linhas = document.querySelectorAll(`.detalhe-grupo-${gid}`);
+  const ico    = document.getElementById(`ico-grupo-${gid}`);
+  const aberto = linhas[0]?.style.display !== 'none';
+  linhas.forEach(l => l.style.display = aberto ? 'none' : '');
+  if (ico) ico.textContent = aberto ? '▶' : '▼';
+}
+
+
+async function carregarComparativo() {
+  try {
+    const res = await fetch(`${API}/produtos/comparativo`);
+    const grupos = await res.json();
+    renderizarComparativo(grupos);
+  } catch (e) { console.error('Erro ao carregar comparativo:', e); }
+}
+
+const MEDALHAS_PROD = ['🥇','🥈','🥉'];
+
+function renderizarComparativo(grupos) {
+  const container = document.getElementById('container-comparativo');
+  const empty     = document.getElementById('empty-comparativo');
+  if (!container) return;
+  container.querySelectorAll('.comparativo-card').forEach(c => c.remove());
+  if (!grupos || !grupos.length) { if (empty) empty.style.display = 'block'; return; }
+  if (empty) empty.style.display = 'none';
+
+  grupos.forEach(grupo => {
+    const card = document.createElement('div');
+    card.className = 'card comparativo-card';
+    const nomeEsc = (grupo.nome||'').replace(/'/g,"\\'");
+
+    const totalItens = grupo.itens.length;
+    const grupoId = grupo.nome.replace(/[^a-z0-9]/gi, '_');
+    const linhas = grupo.itens.map((item, idx) => {
+      const temPreco = item.preco != null;
+      const pos = temPreco ? (idx < 3 ? MEDALHAS_PROD[idx] : String(idx+1)) : '—';
+      const dest = idx === 0 && temPreco ? 'background:rgba(63,185,80,.06)' : '';
+      const fmtBR = (v, mn=2, mx=4) => Number(v).toLocaleString('pt-BR',{minimumFractionDigits:mn,maximumFractionDigits:mx});
+      const preco     = temPreco ? `R$ ${fmtBR(item.preco,2,2)}` : item.bloqueado ? '<span style="color:var(--error);font-size:11px">⚠️ inserir</span>' : '<span style="color:var(--muted)">—</span>';
+      const pFinal    = item.preco_final  != null ? `<strong>R$ ${fmtBR(item.preco_final,2,2)}</strong>` : '—';
+      const pUnit     = item.preco_unitario != null
+        ? `<strong style="color:var(--primary)">R$ ${fmtBR(item.preco_unitario)}</strong>` : '—';
+      const cashback  = item.cashback_pct > 0
+        ? `<span class="badge badge-green">${fmtBR(item.cashback_pct,1,1)}%${item.cashback_parceiro?' · '+item.cashback_parceiro:''}</span>`
+        : `<span class="badge badge-gray">0%</span>`;
+      const site   = item.site_nome || extrairDominioCurto(item.url);
+      const coleta = item.ultima_coleta ? formatarData(item.ultima_coleta) : '<span style="color:var(--warn);font-size:11px">Não coletado</span>';
+      const oculto = idx >= 3 ? `class="linha-extra-${grupoId}" style="display:none"` : '';
+      return `<tr ${oculto} style="${dest}">
+        <td style="text-align:center;font-size:${temPreco&&idx<3?'18':'13'}px">${pos}</td>
+        <td>${site}</td>
+        <td style="color:var(--muted)">${item.dosagem||'—'}</td>
+        <td>${item.quantidade?item.quantidade+' '+(item.unidade_qty||''):'—'}</td>
+        <td style="font-variant-numeric:tabular-nums">${preco}</td>
+        <td>${cashback}</td>
+        <td style="font-variant-numeric:tabular-nums">${pFinal}</td>
+        <td style="font-variant-numeric:tabular-nums">${pUnit}</td>
+        <td style="font-size:11px">${coleta}</td>
+        <td style="display:flex;gap:4px">
+          <a href="${item.url}" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="font-size:11px">🔗</a>
+          <button class="btn btn-ghost btn-sm" style="font-size:11px" title="Atualizar preço" onclick="coletarProdutoAgora(${item.id},'${(item.site_nome||extrairDominioCurto(item.url)).replace(/'/g,"\\'")}')">↻</button>
+        </td>
+      </tr>`;
+    }).join('');
+
+    card.innerHTML = `
+      <div class="card-header">
+        <h2>${grupo.nome} <span style="font-size:11px;color:var(--muted);font-weight:400">${grupo.categoria}</span></h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span style="font-size:12px;color:var(--muted)">${grupo.itens.length} opção(ões)</span>
+          <button class="btn btn-ghost btn-sm" onclick="coletarGrupo('${nomeEsc}')">↻ Atualizar preços</button>
+        </div>
+      </div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr>
+            <th style="width:36px">#</th><th>Site</th><th>Dosagem</th><th>Qtd</th>
+            <th>Preço</th><th>Cashback</th><th>Preço final</th><th>Por unidade</th>
+            <th>Coleta</th><th></th>
+          </tr></thead>
+          <tbody>${linhas}</tbody>
+        </table>
+        ${totalItens > 3 ? `
+        <div style="text-align:center;padding:10px">
+          <button id="btn-expand-${grupoId}" class="btn btn-ghost btn-sm"
+            onclick="toggleLinhasExtra('${grupoId}', ${totalItens})">
+            ▼ Ver mais ${totalItens - 3} opção(ões)
+          </button>
+        </div>` : ''}
+      </div>`;
+    container.appendChild(card);
+  });
+}
+
+function extrairDominioCurto(url) {
+  try { return new URL(url).hostname.replace('www.', '').split('.')[0]; }
+  catch { return url; }
+}
+
+async function cadastrarProduto(event) {
+  event.preventDefault();
+  const nome = document.getElementById('prod-nome').value.trim();
+  const url  = document.getElementById('prod-url').value.trim();
+  const cat  = document.getElementById('prod-categoria').value.trim();
+  const dos  = document.getElementById('prod-dosagem')?.value.trim() || null;
+  const qtd  = parseInt(document.getElementById('prod-quantidade')?.value) || null;
+  const uni  = document.getElementById('prod-unidade')?.value.trim() || 'comprimidos';
+  const fb   = 'feedback-produto';
+  if (!nome || !url || !cat) { mostrarFeedback(fb, 'err', 'Nome, URL e Categoria são obrigatórios.'); return; }
+  try {
+    const res = await fetch(`${API}/produtos`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({nome, url, categoria:cat, dosagem:dos, quantidade:qtd, unidade_qty:uni}),
+    });
+    if (res.status === 409) { mostrarFeedback(fb, 'err', 'Produto já cadastrado.'); return; }
+    if (!res.ok) { const e = await res.json(); mostrarFeedback(fb, 'err', e.detail || 'Erro ao cadastrar.'); return; }
+    mostrarFeedback(fb, 'ok', `"${nome}" cadastrado! Coletando preço (~30 s)...`);
+    document.getElementById('form-produto').reset();
+    document.getElementById('campos-farmacia').style.display = 'none';
+    setTimeout(inicializarProdutos, 5000);
+    setTimeout(inicializarProdutos, 35000);
+  } catch (e) { mostrarFeedback(fb, 'err', 'Erro de conexão: ' + e.message); }
+}
+
+async function coletarProdutoAgora(produtoId, nome) {
+  try {
+    await fetch(`${API}/produtos/${produtoId}/coletar`, {method:'POST'});
+    mostrarFeedback('feedback-produto', 'warn', `Coletando preço de "${nome}" (~30 s)...`);
+    setTimeout(inicializarProdutos, 35000);
+  } catch (e) { console.error(e); }
+}
+
+async function coletarGrupo(nomeGrupo) {
+  const itens = todosProdutos.filter(p => p.nome === nomeGrupo && p.ativo);
+  for (const p of itens) {
+    await fetch(`${API}/produtos/${p.id}/coletar`, {method:'POST'}).catch(() => {});
+  }
+  mostrarFeedback('feedback-produto', 'warn', `Atualizando ${itens.length} item(ns) de "${nomeGrupo}"... pode levar alguns minutos.`);
+  setTimeout(inicializarProdutos, itens.length * 40000);
+}
+
+function confirmarDesativarProduto(id, nome) {
+  abrirModal('Remover produto', `Deseja remover "${nome}"? O histórico de preços será preservado.`, () => desativarProduto(id));
+}
+
+async function desativarProduto(id) {
+  try {
+    await fetch(`${API}/produtos/${id}`, {method:'DELETE'});
+    await inicializarProdutos();
+  } catch (e) { alert('Erro: ' + e.message); }
+}
+
+function abrirInputPrecoManual(produtoId, nome, url) {
+  if (url) window.open(url, '_blank', 'noopener');
+
+  // Remove modal anterior se existir
+  document.getElementById('modal-preco-manual')?.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'modal-preco-manual';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:flex;align-items:center;justify-content:center';
+  overlay.innerHTML = `
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:28px;width:100%;max-width:380px">
+      <p style="font-size:15px;font-weight:600;margin-bottom:6px">Inserir preço manualmente</p>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:16px">${nome}</p>
+      <label style="font-size:12px;color:var(--muted)">Preço atual (R$)</label>
+      <input id="input-preco-manual" type="number" min="0.01" step="0.01" placeholder="Ex: 44.79"
+        style="width:100%;margin:6px 0 16px;font-size:16px;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text)"
+        onkeydown="if(event.key==='Enter')confirmarPrecoManual(${produtoId},'${nome.replace(/'/g,"\'")}')">
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('modal-preco-manual').remove()">Cancelar</button>
+        <button class="btn btn-primary btn-sm" onclick="confirmarPrecoManual(${produtoId},'${nome.replace(/'/g,"\'")}')">Salvar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  setTimeout(() => document.getElementById('input-preco-manual')?.focus(), 100);
+}
+
+async function confirmarPrecoManual(produtoId, nome) {
+  const input = document.getElementById('input-preco-manual');
+  const preco = parseFloat(input?.value);
+  if (!input || isNaN(preco) || preco <= 0) {
+    input?.style.setProperty('border-color', 'var(--error)');
+    return;
+  }
+  document.getElementById('modal-preco-manual')?.remove();
+  try {
+    const r = await fetch(`${API}/produtos/${produtoId}/preco`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ preco }),
+    });
+    if (r.ok) {
+      mostrarFeedback('feedback-produto', 'ok', `Preço de "${nome}" atualizado para R$ ${preco.toFixed(2)}`);
+      setTimeout(inicializarProdutos, 800);
+    } else {
+      mostrarFeedback('feedback-produto', 'err', 'Erro ao salvar preço.');
+    }
+  } catch (e) {
+    mostrarFeedback('feedback-produto', 'err', e.message);
+  }
+}
+
+function toggleLinhasExtra(grupoId, total) {
+  const linhas = document.querySelectorAll(`.linha-extra-${grupoId}`);
+  const btn    = document.getElementById(`btn-expand-${grupoId}`);
+  const expandido = linhas[0]?.style.display !== 'none';
+  linhas.forEach(l => l.style.display = expandido ? 'none' : '');
+  if (btn) btn.innerHTML = expandido
+    ? `▼ Ver mais ${total - 3} opção(ões)`
+    : `▲ Recolher`;
+}
+
+function abrirEdicaoUrl(produtoId, nome, urlAtual) {
+  document.getElementById('modal-editar-url')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'modal-editar-url';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:flex;align-items:center;justify-content:center';
+  overlay.innerHTML = `
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:28px;width:100%;max-width:480px">
+      <p style="font-size:15px;font-weight:600;margin-bottom:6px">Editar URL do produto</p>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:16px">${nome}</p>
+      <label style="font-size:12px;color:var(--muted)">Nova URL</label>
+      <input id="input-nova-url" type="url" value="${urlAtual}"
+        style="width:100%;margin:6px 0 4px;font-size:13px;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text)"
+        onkeydown="if(event.key==='Enter')confirmarEdicaoUrl(${produtoId},'${nome.replace(/'/g,"\\'")}')">
+      <p style="font-size:11px;color:var(--muted);margin-bottom:16px">Ao salvar, a coleta de preço será disparada automaticamente.</p>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('modal-editar-url').remove()">Cancelar</button>
+        <button class="btn btn-primary btn-sm" onclick="confirmarEdicaoUrl(${produtoId},'${nome.replace(/'/g,"\\'")}')">Salvar e coletar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  setTimeout(() => {
+    const inp = document.getElementById('input-nova-url');
+    if (inp) { inp.focus(); inp.select(); }
+  }, 100);
+}
+
+async function confirmarEdicaoUrl(produtoId, nome) {
+  const url = document.getElementById('input-nova-url')?.value.trim();
+  if (!url || !url.startsWith('http')) {
+    document.getElementById('input-nova-url')?.style.setProperty('border-color','var(--error)');
+    return;
+  }
+  document.getElementById('modal-editar-url')?.remove();
+  try {
+    const r = await fetch(`${API}/produtos/${produtoId}`, {
+      method: 'PATCH',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({url}),
+    });
+    if (r.ok) {
+      mostrarFeedback('feedback-produto', 'ok', `URL de "${nome}" atualizada. Coletando novo preço...`);
+      setTimeout(inicializarProdutos, 3000);
+      setTimeout(inicializarProdutos, 35000);
+    } else {
+      mostrarFeedback('feedback-produto', 'err', 'Erro ao atualizar URL.');
+    }
+  } catch(e) { mostrarFeedback('feedback-produto', 'err', e.message); }
+}
+
+function atualizarSugestoesFarmacia(nomeDigitado) {
+  const nome = nomeDigitado.trim().toLowerCase();
+  // Filtrar somente pelo nome exato — evita misturar dosagens de produtos diferentes
+  const exatos = todosProdutos.filter(p => p.nome.toLowerCase() === nome);
+  const filtrados = exatos.length > 0 ? exatos : [];
+
+  const dlDos = document.getElementById('sugestoes-dosagem');
+  if (dlDos) {
+    const dosagens = [...new Set(filtrados.map(p => p.dosagem).filter(Boolean))];
+    dlDos.innerHTML = '';
+    dosagens.forEach(d => { const o = document.createElement('option'); o.value = d; dlDos.appendChild(o); });
+  }
+
+  const dlQtd = document.getElementById('sugestoes-quantidade');
+  if (dlQtd) {
+    const qtds = [...new Set(filtrados.map(p => p.quantidade).filter(v => v != null))].sort((a,b) => a-b);
+    dlQtd.innerHTML = '';
+    qtds.forEach(q => { const o = document.createElement('option'); o.value = q; dlQtd.appendChild(o); });
+  }
+}
