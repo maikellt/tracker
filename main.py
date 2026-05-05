@@ -10,7 +10,7 @@ from jose import JWTError, jwt
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response, Body
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -44,8 +44,24 @@ from database import (
     marcar_produto_bloqueado,
     salvar_preco_manual,
     atualizar_url_produto,
+    obter_historico_precos_produto,
 )
 from scraper_produtos import coletar_preco_produto
+import time as _time
+_cache_cashback: dict = {}   # url -> (resultado, timestamp)
+_CACHE_TTL = 300             # 5 minutos
+
+def _cashback_cached(url: str) -> dict:
+    agora = _time.time()
+    if url in _cache_cashback:
+        res, ts = _cache_cashback[url]
+        if agora - ts < _CACHE_TTL:
+            return res
+    res = mapear_dominio_para_site_cashback(url)
+    _cache_cashback[url] = (res, agora)
+    return res
+
+
 from scraper import coletar_site
 from notificador import carregar_config_notif, salvar_config_notif, enviar_telegram, enviar_email, formatar_mensagem_teste
 from agendador import iniciar_agendador, parar_agendador, reconfigurar_agendador, obter_config
@@ -301,13 +317,45 @@ def max_site(site_id: int, dias: int = 30):
 
 # ── Produtos ─────────────────────────────────────────────────────────────────
 
+@app.get("/produtos/historico", dependencies=[Depends(_verificar_token)])
+def historico_produtos(dias: int = 30):
+    """Uma série por produto — menor preço final do dia e qual loja ofereceu."""
+    if dias > 90:
+        dias = 90
+
+    produtos = obter_todos_produtos_ativos()
+    grupos: dict = {}
+    for p in produtos:
+        grupos.setdefault(p["nome"], []).append(p)
+
+    resultado = []
+    for nome, itens in grupos.items():
+        historico: dict = {}   # data -> {preco_final, loja}
+        for p in itens:
+            qtd      = p["quantidade"] or 1
+            cashback = _cashback_cached(p["url"])
+            cb_pct   = cashback["cashback_pct"]
+            loja     = cashback["site_nome"] or p["url"].split("/")[2].replace("www.", "").split(".")[0]
+            for entry in obter_historico_precos_produto(p["id"], dias):
+                data    = entry["capturado_em"][:10]
+                preco_f = round(entry["preco"] * (1 - cb_pct / 100), 2)
+                if data not in historico or preco_f < historico[data]["preco"]:
+                    historico[data] = {"preco": preco_f, "loja": loja}
+        resultado.append({
+            "nome":      nome,
+            "historico": [{"data": k, "preco": v["preco"], "loja": v["loja"]}
+                          for k, v in sorted(historico.items())],
+        })
+    return resultado
+
+
 @app.get("/produtos/comparativo", dependencies=[Depends(_verificar_token)])
 def comparativo_produtos():
     """Agrupa produtos por nome, calcula cashback e ordena por preço unitário."""
     grupos: dict = {}
     for p in obter_todos_produtos_ativos():
         ultimo   = obter_ultimo_preco_produto(p["id"])
-        cashback = mapear_dominio_para_site_cashback(p["url"])
+        cashback = _cashback_cached(p["url"])
         preco    = ultimo["preco"] if ultimo else None
         cb_pct   = cashback["cashback_pct"]
         preco_final  = round(preco * (1 - cb_pct / 100), 2) if preco is not None else None
@@ -344,7 +392,7 @@ def listar_produtos():
     resultado = []
     for p in obter_todos_produtos():
         ultimo   = obter_ultimo_preco_produto(p["id"])
-        cashback = mapear_dominio_para_site_cashback(p["url"])
+        cashback = _cashback_cached(p["url"])
         preco    = ultimo["preco"] if ultimo else None
         cb_pct   = cashback["cashback_pct"]
         preco_f  = round(preco * (1 - cb_pct / 100), 2) if preco is not None else None
@@ -433,6 +481,20 @@ def coletar_produto_agora(produto_id: int):
         daemon=True,
     ).start()
     return {"status": "coleta_iniciada"}
+
+
+
+# ── Busca ─────────────────────────────────────────────────────────────────────
+
+@app.get("/busca/templates", dependencies=[Depends(_verificar_token)])
+def listar_templates():
+    return obter_configuracao("busca_templates") or []
+
+
+@app.put("/busca/templates", dependencies=[Depends(_verificar_token)])
+def salvar_templates(dados: list = Body(...)):
+    salvar_configuracao("busca_templates", dados)
+    return dados
 
 
 # ── Config ────────────────────────────────────────────────────────────────────

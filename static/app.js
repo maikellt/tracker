@@ -204,6 +204,7 @@ function mudarAba(aba) {
   if (aba === 'sites')  carregarSites();
   if (aba === 'config') { carregarConfig(); renderizarAcessos(); carregarNotificacoes(); }
   if (aba === 'produtos') inicializarProdutos();
+  if (aba === 'busca') inicializarBusca();
 }
 
 async function inicializar() {
@@ -922,7 +923,7 @@ function toggleCamposFarmacia(cat) {
 }
 
 async function inicializarProdutos() {
-  await Promise.all([carregarProdutos(), carregarComparativo()]);
+  await Promise.all([carregarProdutos(), carregarComparativo(), carregarGraficoProdutos()]);
   // Sugestões de nome
   const nomes = [...new Set(todosProdutos.map(p => p.nome))];
   const dlNome = document.getElementById('sugestoes-prod-nome');
@@ -1298,4 +1299,277 @@ function atualizarSugestoesFarmacia(nomeDigitado) {
     dlQtd.innerHTML = '';
     qtds.forEach(q => { const o = document.createElement('option'); o.value = q; dlQtd.appendChild(o); });
   }
+}
+
+// ── Gráfico histórico de produtos ─────────────────────────────────────────────
+
+
+// ── Gráfico histórico de produtos ─────────────────────────────────────────────
+
+let graficoProdutosInstance = null;
+
+async function carregarGraficoProdutos() {
+  const dias = Number(document.getElementById('grafico-prod-dias')?.value || 30);
+  try {
+    const res  = await fetch(`${API}/produtos/historico?dias=${dias}`);
+    const data = await res.json();
+    renderizarGraficoProdutos(data, dias);
+  } catch(e) { console.error('Erro gráfico produtos:', e); }
+}
+
+function renderizarGraficoProdutos(grupos, dias) {
+  const ctx = document.getElementById('grafico-produtos');
+  if (!ctx) return;
+  const labels = [];
+  for (let i = dias - 1; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    labels.push(d.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' }));
+  }
+  const labelsX = labels.map(l => l.slice(5));
+  const comDados = grupos.filter(g => g.historico && g.historico.length > 0);
+  const datasets = comDados.map((grupo, idx) => {
+    const cor   = CORES_SITES[idx % CORES_SITES.length];
+    const mapa  = {};
+    const lojas = {};
+    grupo.historico.forEach(h => { mapa[h.data] = h.preco; lojas[h.data] = h.loja; });
+    const data     = labels.map(l => mapa[l]  !== undefined ? mapa[l]  : null);
+    const lojasDia = labels.map(l => lojas[l] !== undefined ? lojas[l] : null);
+    const vals     = data.filter(v => v !== null);
+    const minVal   = vals.length ? Math.min(...vals) : null;
+    const minIdx   = minVal !== null ? data.findIndex(v => v === minVal) : -1;
+    return {
+      label:            grupo.nome,
+      data,
+      _lojas:           lojasDia,
+      borderColor:      cor.border,
+      backgroundColor:  cor.bg,
+      borderWidth:      2,
+      pointRadius:      data.map((v, i) => v !== null ? (i === minIdx ? 7 : 3) : 0),
+      pointHoverRadius: 5,
+      pointBackgroundColor: data.map((v, i) => i === minIdx ? cor.border : 'transparent'),
+      pointBorderColor: cor.border,
+      spanGaps:  false,
+      tension:   0.3,
+      fill:      true,
+    };
+  });
+  if (graficoProdutosInstance) { graficoProdutosInstance.destroy(); graficoProdutosInstance = null; }
+  if (!datasets.length) return;
+  graficoProdutosInstance = new Chart(ctx, {
+    type: 'line',
+    data: { labels: labelsX, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#8b949e', boxWidth: 12, font: { size: 11 } } },
+        tooltip: {
+          backgroundColor: '#161b22', borderColor: '#30363d', borderWidth: 1,
+          titleColor: '#e6edf3', bodyColor: '#8b949e',
+          callbacks: {
+            label(ctx) {
+              if (ctx.parsed.y === null) return null;
+              const loja = ctx.dataset._lojas?.[ctx.dataIndex];
+              const val  = ctx.parsed.y.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+              return `${ctx.dataset.label}: R$ ${val}${loja ? ' — ' + loja : ''}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: { ticks: { color: '#8b949e', maxTicksLimit: 10, font: { size: 11 } }, grid: { color: '#21262d' } },
+        y: {
+          ticks: { color: '#8b949e', font: { size: 11 }, callback: v => `R$ ${v.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` },
+          grid: { color: '#21262d' },
+          beginAtZero: false,
+        },
+      },
+    },
+  });
+}
+
+// ── Busca ─────────────────────────────────────────────────────────────────────
+
+let templatesCache = [];
+
+async function inicializarBusca() {
+  await carregarTemplates();
+  renderizarFiltroCategoria();
+  renderizarPreviewBusca();
+}
+
+async function carregarTemplates() {
+  try {
+    const res = await fetch(`${API}/busca/templates`);
+    templatesCache = await res.json();
+    renderizarTabelaTemplates();
+  } catch(e) { console.error('Erro ao carregar templates:', e); }
+}
+
+async function salvarTemplates() {
+  try {
+    const r = await fetch(`${API}/busca/templates`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(templatesCache),
+    });
+    if (!r.ok) {
+      const err = await r.text();
+      console.error('Erro ao salvar templates:', r.status, err);
+      return false;
+    }
+    return true;
+  } catch(e) {
+    console.error('Erro de conexão ao salvar templates:', e);
+    return false;
+  }
+}
+
+function renderizarFiltroCategoria() {
+  const sel  = document.getElementById('busca-categoria');
+  const cats = [...new Set(templatesCache.map(t => t.categoria).filter(Boolean))].sort();
+  const val  = sel?.value || '';
+  if (!sel) return;
+  sel.innerHTML = '<option value="">Todas</option>';
+  cats.forEach(c => {
+    const o = document.createElement('option');
+    o.value = c; o.textContent = c;
+    if (c === val) o.selected = true;
+    sel.appendChild(o);
+  });
+  // Sugestões no form de cadastro
+  const dl = document.getElementById('sugestoes-tmpl-cat');
+  if (dl) { dl.innerHTML = ''; cats.forEach(c => { const o = document.createElement('option'); o.value = c; dl.appendChild(o); }); }
+}
+
+function renderizarTabelaTemplates() {
+  const tbody = document.getElementById('tabela-templates');
+  const empty = document.getElementById('empty-templates');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  if (!templatesCache.length) { if (empty) empty.style.display = 'block'; return; }
+  if (empty) empty.style.display = 'none';
+
+  templatesCache.forEach((t, idx) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><strong>${t.nome}</strong></td>
+      <td><span class="badge badge-gray">${t.categoria}</span></td>
+      <td style="font-size:12px;color:var(--muted);max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.url}">${t.url}</td>
+      <td style="display:flex;gap:4px">
+        <button class="btn btn-ghost btn-sm" onclick="editarTemplate(${idx})" title="Editar">✎</button>
+        <button class="btn btn-danger btn-sm" onclick="removerTemplate(${idx})">✕</button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+  renderizarFiltroCategoria();
+}
+
+function renderizarPreviewBusca() {
+  const preview  = document.getElementById('preview-busca');
+  const termo    = document.getElementById('busca-termo')?.value.trim() || '';
+  const cat      = document.getElementById('busca-categoria')?.value || '';
+  if (!preview) return;
+
+  const filtrados = templatesCache.filter(t => !cat || t.categoria === cat);
+  if (!filtrados.length) { preview.innerHTML = '<span style="color:var(--muted);font-size:12px">Nenhum template na categoria selecionada.</span>'; return; }
+
+  preview.innerHTML = filtrados.map(t => {
+    const url = termo ? t.url.replaceAll('{termo}', encodeURIComponent(termo)) : t.url;
+    return `<div style="display:flex;align-items:center;gap:8px;font-size:12px">
+      <span class="badge badge-gray" style="min-width:120px;text-align:center">${t.nome}</span>
+      <span style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1" title="${url}">${url}</span>
+    </div>`;
+  }).join('');
+}
+
+function abrirUrlsBusca() {
+  const termo = document.getElementById('busca-termo')?.value.trim();
+  const cat   = document.getElementById('busca-categoria')?.value || '';
+  if (!termo) { document.getElementById('busca-termo')?.focus(); return; }
+  const filtrados = templatesCache.filter(t => !cat || t.categoria === cat);
+  if (!filtrados.length) return;
+
+  const preview = document.getElementById('preview-busca');
+  if (!preview) return;
+
+  // Montar links clicáveis — browser só permite window.open no evento do usuário
+  const urls = filtrados.map(t => ({
+    nome: t.nome,
+    url:  t.url.replaceAll('{termo}', encodeURIComponent(termo)),
+  }));
+
+  preview.innerHTML = `
+    <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+      Clique em cada loja para abrir em nova aba:
+    </div>
+    ${urls.map(u => `
+      <div style="display:flex;align-items:center;gap:10px">
+        <a href="${u.url}" target="_blank" rel="noopener"
+          style="display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);text-decoration:none;color:var(--text);font-size:13px;transition:background 140ms;flex:1"
+          onmouseover="this.style.background='var(--accent-bg)'"
+          onmouseout="this.style.background='var(--surface2)'">
+          <span style="font-size:16px">🔗</span>
+          <span style="font-weight:600;min-width:140px">${u.nome}</span>
+          <span style="color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${u.url}</span>
+        </a>
+      </div>`).join('')}
+    <div style="margin-top:10px">
+      <button class="btn btn-ghost btn-sm" onclick="abrirTodasSequencial(${JSON.stringify(urls).replace(/"/g,'&quot;')})">
+        &#128279; Tentar abrir todas automaticamente
+      </button>
+      <span style="font-size:11px;color:var(--muted);margin-left:8px">(pode ser bloqueado pelo browser)</span>
+    </div>`;
+}
+
+function abrirTodasSequencial(urls) {
+  urls.forEach((u, i) => setTimeout(() => window.open(u.url, '_blank', 'noopener'), i * 300));
+}
+
+async function adicionarTemplate() {
+  const nome = document.getElementById('tmpl-nome')?.value.trim();
+  const cat  = document.getElementById('tmpl-categoria')?.value.trim();
+  const url  = document.getElementById('tmpl-url')?.value.trim();
+  const fb   = document.getElementById('feedback-template');
+
+  if (!nome || !cat || !url) {
+    if (fb) { fb.className = 'feedback feedback-err'; fb.textContent = 'Preencha todos os campos.'; fb.style.display = 'block'; }
+    return;
+  }
+  if (!url.includes('{termo}')) {
+    if (fb) { fb.className = 'feedback feedback-err'; fb.textContent = 'A URL deve conter {termo}.'; fb.style.display = 'block'; }
+    return;
+  }
+
+  templatesCache.push({ nome, categoria: cat, url });
+  const ok = await salvarTemplates();
+  if (!ok) {
+    templatesCache.pop();
+    if (fb) { fb.className = 'feedback feedback-err'; fb.textContent = 'Erro ao salvar. Verifique o console.'; fb.style.display = 'block'; }
+    return;
+  }
+  renderizarTabelaTemplates();
+  renderizarPreviewBusca();
+  document.getElementById('tmpl-nome').value = '';
+  document.getElementById('tmpl-url').value  = '';
+  if (fb) { fb.className = 'feedback feedback-ok'; fb.textContent = 'Template adicionado!'; fb.style.display = 'block'; setTimeout(() => fb.style.display = 'none', 3000); }
+}
+
+function editarTemplate(idx) {
+  const t = templatesCache[idx];
+  if (!t) return;
+  document.getElementById('tmpl-nome').value      = t.nome;
+  document.getElementById('tmpl-categoria').value  = t.categoria;
+  document.getElementById('tmpl-url').value        = t.url;
+  removerTemplate(idx, false);
+  document.getElementById('tmpl-nome').focus();
+}
+
+async function removerTemplate(idx, salvar = true) {
+  templatesCache.splice(idx, 1);
+  if (salvar) await salvarTemplates();
+  renderizarTabelaTemplates();
+  renderizarPreviewBusca();
 }
