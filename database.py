@@ -658,3 +658,11 @@ def salvar_preco_manual(produto_id: int, preco: float):
 def atualizar_url_produto(produto_id: int, url: str):
     _local_write("UPDATE produtos SET url=?, bloqueado=0 WHERE id=?", (url, produto_id))
     _turso_write_async("UPDATE produtos SET url=?, bloqueado=0 WHERE id=?", (url, produto_id))
+
+
+def obter_historico_precos_produto(produto_id: int, dias: int = 30) -> list:
+    return _rows(
+        "SELECT preco, capturado_em FROM precos_produtos "
+        "WHERE produto_id=? AND capturado_em >= datetime('now', ?) ORDER BY capturado_em",
+        (produto_id, f"-{dias} days"),
+    )
