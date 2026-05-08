@@ -1056,8 +1056,12 @@ function renderizarComparativo(grupos) {
       const fmtBR = (v, mn=2, mx=4) => Number(v).toLocaleString('pt-BR',{minimumFractionDigits:mn,maximumFractionDigits:mx});
       const preco     = temPreco ? `R$ ${fmtBR(item.preco,2,2)}` : item.bloqueado ? '<span style="color:var(--error);font-size:11px">⚠️ inserir</span>' : '<span style="color:var(--muted)">—</span>';
       const pFinal    = item.preco_final  != null ? `<strong>R$ ${fmtBR(item.preco_final,2,2)}</strong>` : '—';
-      const pUnit     = item.preco_unitario != null
-        ? `<strong style="color:var(--primary)">R$ ${fmtBR(item.preco_unitario)}</strong>` : '—';
+      const _valorUnit = item.preco_por_mg != null ? item.preco_por_mg : item.preco_unitario;
+      const _labelUnit = item.preco_por_mg != null
+        ? '<span style="color:var(--muted);font-size:11px"> /mg</span>'
+        : `<span style="color:var(--muted);font-size:11px"> /${item.unidade_qty||'un'}</span>`;
+      const pUnit = _valorUnit != null
+        ? `<strong style="color:var(--primary)">R$ ${fmtBR(_valorUnit)}</strong>${_labelUnit}` : '—';
       const cashback  = item.cashback_pct > 0
         ? `<span class="badge badge-green">${fmtBR(item.cashback_pct,1,1)}%${item.cashback_parceiro?' · '+item.cashback_parceiro:''}</span>`
         : `<span class="badge badge-gray">0%</span>`;
@@ -1067,7 +1071,7 @@ function renderizarComparativo(grupos) {
       return `<tr ${oculto} style="${dest}">
         <td style="text-align:center;font-size:${temPreco&&idx<3?'18':'13'}px">${pos}</td>
         <td>${site}</td>
-        <td style="color:var(--muted)">${item.dosagem||'—'}</td>
+        <td style="color:var(--muted)">${item.dosagem||'—'}${item.melhor ? ' <span class="badge badge-green" style="font-size:10px">★ melhor</span>' : ''}</td>
         <td>${item.quantidade?item.quantidade+' '+(item.unidade_qty||''):'—'}</td>
         <td style="font-variant-numeric:tabular-nums">${preco}</td>
         <td>${cashback}</td>

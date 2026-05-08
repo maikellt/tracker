@@ -47,6 +47,18 @@ from database import (
     obter_historico_precos_produto,
 )
 from scraper_produtos import coletar_preco_produto
+
+def _dosagem_mg(dosagem: str | None) -> float | None:
+    """Extrai valor numérico em mg de uma string de dosagem.
+    '4mg' → 4.0  |  '500 mg' → 500.0  |  None / '10ml' → None
+    """
+    import re as _re
+    if not dosagem:
+        return None
+    m = _re.search(r'(\d+[.,]?\d*)\s*mg', dosagem.lower())
+    if m:
+        return float(m.group(1).replace(',', '.'))
+    return None
 import time as _time
 _cache_cashback: dict = {}   # url -> (resultado, timestamp)
 _CACHE_TTL = 300             # 5 minutos
@@ -361,16 +373,22 @@ def comparativo_produtos():
         preco_final  = round(preco * (1 - cb_pct / 100), 2) if preco is not None else None
         quantidade   = p["quantidade"] or 1
         preco_unit   = round(preco_final / quantidade, 4) if preco_final is not None else None
+        dosagem_num  = _dosagem_mg(p.get('dosagem'))
+        dose_total   = (dosagem_num * quantidade) if dosagem_num else None
+        preco_por_mg = round(preco_final / dose_total, 6) if (preco_final is not None and dose_total) else None
 
         item = {
             "id":               p["id"],
             "url":              p["url"],
             "dosagem":          p["dosagem"],
+            "dosagem_mg":       dosagem_num,
             "quantidade":       p["quantidade"],
             "unidade_qty":      p["unidade_qty"],
             "preco":            preco,
             "preco_final":      preco_final,
             "preco_unitario":   preco_unit,
+            "preco_por_mg":     preco_por_mg,
+            "melhor":           False,
             "cashback_pct":     cb_pct,
             "cashback_parceiro": cashback["parceiro"],
             "site_nome":        cashback["site_nome"],
@@ -382,7 +400,18 @@ def comparativo_produtos():
         grupos[key]["itens"].append(item)
 
     for g in grupos.values():
-        g["itens"].sort(key=lambda x: (x["preco_unitario"] is None, x["preco_unitario"] or 0))
+        # Usa preco_por_mg quando o grupo tem dosagens cadastradas
+        tem_mg = any(i.get("preco_por_mg") is not None for i in g["itens"])
+        if tem_mg:
+            g["itens"].sort(key=lambda x: (x["preco_por_mg"] is None, x["preco_por_mg"] or 0))
+        else:
+            g["itens"].sort(key=lambda x: (x["preco_unitario"] is None, x["preco_unitario"] or 0))
+        # Marca o melhor custo-benefício do grupo
+        disponiveis = [i for i in g["itens"]
+                       if (i.get("preco_por_mg") if tem_mg else i.get("preco_unitario")) is not None]
+        if disponiveis:
+            disponiveis[0]["melhor"] = True
+        g["tem_mg"] = tem_mg  # sinaliza ao frontend qual coluna mostrar
 
     return list(grupos.values())
 
