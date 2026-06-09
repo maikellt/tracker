@@ -394,14 +394,15 @@ function atualizarSummary(lista) {
 
 async function carregarGrafico() {
   const tipoFiltro = document.getElementById('filtro-tipo').value;
-  const siteId = document.getElementById('filtro-site').value;
-  const dias   = Number(document.getElementById('grafico-dias').value || 30);
-  console.log('[GRAFICO] siteId=', siteId, 'dias=', dias, 'tipo=', tipoFiltro, 'sites=', todosOsSites.length);
+  const siteId     = document.getElementById('filtro-site').value;
+  const categoria  = document.getElementById('filtro-categoria').value;
+  const dias       = Number(document.getElementById('grafico-dias').value || 30);
+  console.log('[GRAFICO] siteId=', siteId, 'dias=', dias, 'tipo=', tipoFiltro, 'categoria=', categoria, 'sites=', todosOsSites.length);
   try {
     if (siteId) {
       await carregarGraficoUmSite(siteId, dias, tipoFiltro);
     } else {
-      await carregarGraficoTodosSites(dias, tipoFiltro);
+      await carregarGraficoTodosSites(dias, tipoFiltro, categoria);
     }
   } catch(e) {
     console.error('[GRAFICO] erro:', e);
@@ -427,8 +428,8 @@ async function carregarGraficoUmSite(siteId, dias, tipo) {
   } catch (e) { console.error('Erro no gráfico:', e); }
 }
 
-async function carregarGraficoTodosSites(dias, tipo) {
-  const sites = todosOsSites.filter(s => s.ativo);
+async function carregarGraficoTodosSites(dias, tipo, categoria = '') {
+  const sites = todosOsSites.filter(s => s.ativo && (!categoria || s.categoria === categoria));
   if (!sites.length) { limparGrafico(); return; }
   try {
     const mostraCash  = !tipo || tipo === 'cashback';
