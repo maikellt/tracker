@@ -123,6 +123,14 @@ DDL = [
         preco        REAL,
         capturado_em DATETIME DEFAULT CURRENT_TIMESTAMP
     )""",
+    """CREATE TABLE IF NOT EXISTS ajustes_cashback (
+        id       INTEGER PRIMARY KEY,
+        site_id  INTEGER REFERENCES sites(id),
+        parceiro TEXT NOT NULL,
+        tipo     TEXT NOT NULL,
+        fator    REAL NOT NULL DEFAULT 1.0,
+        UNIQUE(site_id, parceiro, tipo)
+    )""",
 ]
 
 
@@ -246,6 +254,7 @@ def inicializar_banco():
         t.commit()
         # Sincronizar dados do Turso para local
         _sincronizar_do_turso()
+        _sincronizar_configuracoes_do_turso()
         _sincronizar_configuracoes_do_turso()
     else:
         # Modo local puro (dev)
@@ -498,6 +507,55 @@ def salvar_configuracao(chave: str, dados: dict):
     )
 
 
+# ── Ajustes de cashback ───────────────────────────────────────────────────────
+
+def _sincronizar_ajustes_do_turso():
+    """Sincroniza tabela ajustes_cashback do Turso para o SQLite local."""
+    rows = _rows_turso("SELECT id, site_id, parceiro, tipo, fator FROM ajustes_cashback")
+    for r in rows:
+        _local_write(
+            "INSERT OR REPLACE INTO ajustes_cashback (id, site_id, parceiro, tipo, fator) VALUES (?,?,?,?,?)",
+            (r["id"], r["site_id"], r["parceiro"], r["tipo"], r["fator"]),
+        )
+    logger.info(f"[SYNC] {len(rows)} ajuste(s) de cashback sincronizado(s)")
+
+
+def obter_ajustes(site_id: int) -> list:
+    """Retorna todos os ajustes de cashback de um site."""
+    return _rows(
+        "SELECT id, parceiro, tipo, fator FROM ajustes_cashback WHERE site_id = ?",
+        (site_id,),
+    )
+
+
+def salvar_ajuste(site_id: int, parceiro: str, tipo: str, fator: float):
+    """Insere ou atualiza um ajuste. fator=1.0 significa sem ajuste."""
+    _local_write(
+        """INSERT INTO ajustes_cashback (site_id, parceiro, tipo, fator)
+           VALUES (?,?,?,?)
+           ON CONFLICT(site_id, parceiro, tipo) DO UPDATE SET fator=excluded.fator""",
+        (site_id, parceiro, tipo, fator),
+    )
+    _turso_write_async(
+        """INSERT INTO ajustes_cashback (site_id, parceiro, tipo, fator)
+           VALUES (?,?,?,?)
+           ON CONFLICT(site_id, parceiro, tipo) DO UPDATE SET fator=excluded.fator""",
+        (site_id, parceiro, tipo, fator),
+    )
+
+
+def remover_ajuste(site_id: int, parceiro: str, tipo: str):
+    """Remove o ajuste de um parceiro/tipo."""
+    _local_write(
+        "DELETE FROM ajustes_cashback WHERE site_id=? AND parceiro=? AND tipo=?",
+        (site_id, parceiro, tipo),
+    )
+    _turso_write_async(
+        "DELETE FROM ajustes_cashback WHERE site_id=? AND parceiro=? AND tipo=?",
+        (site_id, parceiro, tipo),
+    )
+
+
 def verificar_alerta_sem_dados(site_id: int) -> bool:
     row = _row(
         """SELECT COUNT(*) as total FROM snapshots
@@ -633,11 +691,16 @@ def mapear_dominio_para_site_cashback(url_produto: str) -> dict:
         return {"site_id": site_match["id"], "site_nome": site_match["nome"],
                 "cashback_pct": 0.0, "parceiro": None}
 
-    melhor = max(disponiveis, key=lambda p: p["ultimo_valor"])
+    # Aplicar fator de ajuste antes de comparar e retornar
+    ajustes = {a["parceiro"]: a["fator"] for a in obter_ajustes(site_match["id"])}
+    def _valor_ajustado(p):
+        fator = ajustes.get(p["parceiro"], 1.0)
+        return p["ultimo_valor"] * fator
+    melhor = max(disponiveis, key=_valor_ajustado)
     return {
         "site_id":      site_match["id"],
         "site_nome":    site_match["nome"],
-        "cashback_pct": melhor["ultimo_valor"],
+        "cashback_pct": _valor_ajustado(melhor),
         "parceiro":     melhor["parceiro"],
     }
 

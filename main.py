@@ -45,6 +45,10 @@ from database import (
     salvar_preco_manual,
     atualizar_url_produto,
     obter_historico_precos_produto,
+    obter_ajustes,
+    salvar_ajuste,
+    remover_ajuste,
+    obter_ultimo_scraping_sucesso,
 )
 from scraper_produtos import coletar_preco_produto
 
@@ -244,6 +248,12 @@ class ProdutoEntrada(BaseModel):
     unidade_qty: str = "comprimidos"
 
 
+class AjusteEntrada(BaseModel):
+    parceiro: str
+    tipo: str
+    fator: float
+
+
 # ── Sites ─────────────────────────────────────────────────────────────────────
 
 @app.get("/sites")
@@ -252,6 +262,7 @@ def listar_sites():
     resultado = []
     for s in sites:
         alerta = verificar_alerta_sem_dados(s["id"]) if s["ativo"] else False
+        ultima = obter_ultimo_scraping_sucesso(s["id"])
         resultado.append({
             "id": s["id"],
             "nome": s["nome"],
@@ -259,6 +270,7 @@ def listar_sites():
             "categoria": s["categoria"],
             "ativo": bool(s["ativo"]),
             "alerta_sem_dados": alerta,
+            "ultima_coleta": ultima.isoformat() if ultima else None,
         })
     return resultado
 
@@ -514,6 +526,36 @@ def coletar_produto_agora(produto_id: int):
 
 
 # ── Busca ─────────────────────────────────────────────────────────────────────
+
+@app.get("/sites/{site_id}/ajustes", dependencies=[Depends(_verificar_token)])
+def listar_ajustes(site_id: int):
+    site = obter_site_por_id(site_id)
+    if not site:
+        raise HTTPException(status_code=404, detail="Site não encontrado")
+    return obter_ajustes(site_id)
+
+
+@app.put("/sites/{site_id}/ajustes", dependencies=[Depends(_verificar_token)])
+def upsert_ajuste(site_id: int, dados: AjusteEntrada):
+    site = obter_site_por_id(site_id)
+    if not site:
+        raise HTTPException(status_code=404, detail="Site não encontrado")
+    if dados.fator <= 0:
+        raise HTTPException(status_code=422, detail="Fator deve ser maior que zero")
+    salvar_ajuste(site_id, dados.parceiro, dados.tipo, dados.fator)
+    _cache_cashback.clear()
+    return {"site_id": site_id, "parceiro": dados.parceiro, "tipo": dados.tipo, "fator": dados.fator}
+
+
+@app.delete("/sites/{site_id}/ajustes", status_code=204, dependencies=[Depends(_verificar_token)])
+def deletar_ajuste(site_id: int, parceiro: str, tipo: str):
+    site = obter_site_por_id(site_id)
+    if not site:
+        raise HTTPException(status_code=404, detail="Site não encontrado")
+    remover_ajuste(site_id, parceiro, tipo)
+    _cache_cashback.clear()
+    return Response(status_code=204)
+
 
 @app.get("/busca/templates", dependencies=[Depends(_verificar_token)])
 def listar_templates():

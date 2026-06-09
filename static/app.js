@@ -118,6 +118,8 @@ function salvarAcessoLocal() {
 }
 let configAtual = {};
 let graficoInstance = null;
+// ajusteMap: { "site_id|parceiro|tipo": fator }
+let ajusteMap = {};
 
 const CORES_SITES = [
   { border: '#3fb950', bg: 'rgba(63,185,80,.12)'   },
@@ -157,6 +159,13 @@ function formatarData(iso) {
     const d = new Date(iso.replace(' ', 'T') + 'Z');
     return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
   } catch { return iso; }
+}
+
+// Retorna o valor do parceiro após aplicar o fator de ajuste armazenado
+function valorAjustado(p) {
+  if (p.ultimo_valor === null || p.ultimo_valor === undefined) return null;
+  const fator = ajusteMap[`${p.site_id}|${p.parceiro}|${p.tipo}`];
+  return fator !== undefined ? p.ultimo_valor * fator : p.ultimo_valor;
 }
 
 function formatarValor(v, unidade) {
@@ -268,17 +277,32 @@ async function carregarSitesBase() {
 
 async function carregarTodosParceiros() {
   todosParceiros = [];
+  ajusteMap = {};
   const sites = todosOsSites.filter(s => s.ativo);
   await Promise.all(sites.map(async s => {
-    try {
-      const res = await fetch(`${API}/sites/${s.id}/parceiros`);
-      const data = await res.json();
-      ['cashback', 'pontos_milhas'].forEach(tipo => {
-        (data[tipo] || []).forEach(p => {
-          todosParceiros.push({ site_id: s.id, site_nome: s.nome, site_categoria: s.categoria, tipo, ...p });
+    // Carregar parceiros e ajustes em paralelo por site
+    const [parcRes, ajRes] = await Promise.all([
+      fetch(`${API}/sites/${s.id}/parceiros`).catch(() => null),
+      fetch(`${API}/sites/${s.id}/ajustes`).catch(() => null),
+    ]);
+    if (parcRes) {
+      try {
+        const data = await parcRes.json();
+        ['cashback', 'pontos_milhas'].forEach(tipo => {
+          (data[tipo] || []).forEach(p => {
+            todosParceiros.push({ site_id: s.id, site_nome: s.nome, site_categoria: s.categoria, tipo, ...p });
+          });
         });
-      });
-    } catch {}
+      } catch {}
+    }
+    if (ajRes) {
+      try {
+        const ajustes = await ajRes.json();
+        (ajustes || []).forEach(a => {
+          ajusteMap[`${s.id}|${a.parceiro}|${a.tipo}`] = a.fator;
+        });
+      } catch {}
+    }
   }));
 }
 
@@ -313,13 +337,28 @@ function renderizarTabelaParceiros(lista) {
     const chave = p.parceiro;
     const temAcesso = !!acessoMap[chave];
     const cor = corPorSite[p.site_id];
+    const valorOrig = p.ultimo_valor;
+    const valorReal = valorAjustado(p);
+    const fatorAtual = ajusteMap[`${p.site_id}|${p.parceiro}|${p.tipo}`];
+    const pctAjustada = (valorOrig !== null && valorOrig !== undefined && fatorAtual !== undefined)
+      ? (valorOrig * fatorAtual).toFixed(2)
+      : '';
     const tr = document.createElement('tr');
     tr.style.borderLeft = `3px solid ${cor.border}`;
     tr.innerHTML = `
       <td style="padding-left:10px">${p.site_nome}</td>
       <td><strong>${p.parceiro}</strong></td>
       <td>${p.tipo === 'cashback' ? 'Cashback' : 'Pontos/Milhas'}</td>
-      <td style="font-variant-numeric:tabular-nums;font-weight:600">${formatarValor(p.ultimo_valor, p.unidade)}</td>
+      <td style="font-variant-numeric:tabular-nums;font-weight:600">${formatarValor(valorReal, p.unidade)}</td>
+      <td>
+        <input type="number" min="0" step="0.1"
+          value="${pctAjustada}"
+          placeholder="${formatarValor(valorOrig, p.unidade)}"
+          title="Deixe vazio para usar o valor original (${formatarValor(valorOrig, p.unidade)})"
+          style="width:80px;text-align:right"
+          onchange="salvarAjustePct(${p.site_id}, '${p.parceiro.replace(/'/g, "\'")}', '${p.tipo}', this.value, ${valorOrig})"
+        />
+      </td>
       <td><span class="badge ${p.status === 'ativo' ? 'badge-green' : 'badge-gray'}">${p.status === 'ativo' ? '● ativo' : '○ inativo'}</span></td>
       <td style="color:var(--muted)">${formatarData(p.ultima_coleta)}</td>
       <td><label class="toggle-acesso"><input type="checkbox" ${temAcesso ? 'checked' : ''} onchange="toggleAcesso('${chave}', this.checked)" /> tenho acesso</label></td>`;
@@ -336,16 +375,16 @@ function atualizarSummary(lista) {
   const cashbacks = lista.filter(p => p.tipo === 'cashback' && p.ultimo_valor !== null);
   const pontos    = lista.filter(p => p.tipo === 'pontos_milhas' && p.ultimo_valor !== null);
   if (cashbacks.length) {
-    const melhor = cashbacks.reduce((a, b) => a.ultimo_valor > b.ultimo_valor ? a : b);
-    document.getElementById('sum-cashback').textContent = formatarValor(melhor.ultimo_valor, melhor.unidade);
+    const melhor = cashbacks.reduce((a, b) => (valorAjustado(a) ?? 0) > (valorAjustado(b) ?? 0) ? a : b);
+    document.getElementById('sum-cashback').textContent = formatarValor(valorAjustado(melhor), melhor.unidade);
     document.getElementById('sum-cashback-sub').textContent = `${melhor.parceiro} · ${melhor.site_nome}`;
   } else {
     document.getElementById('sum-cashback').textContent = '—';
     document.getElementById('sum-cashback-sub').textContent = 'Sem dados no período';
   }
   if (pontos.length) {
-    const melhor = pontos.reduce((a, b) => a.ultimo_valor > b.ultimo_valor ? a : b);
-    document.getElementById('sum-pontos').textContent = formatarValor(melhor.ultimo_valor, melhor.unidade);
+    const melhor = pontos.reduce((a, b) => (valorAjustado(a) ?? 0) > (valorAjustado(b) ?? 0) ? a : b);
+    document.getElementById('sum-pontos').textContent = formatarValor(valorAjustado(melhor), melhor.unidade);
     document.getElementById('sum-pontos-sub').textContent = `${melhor.parceiro} · ${melhor.site_nome}`;
   } else {
     document.getElementById('sum-pontos').textContent = '—';
@@ -821,6 +860,49 @@ async function testarNotificacoes() {
     fb.className = 'feedback feedback-err';
     fb.textContent = 'Erro de conexão: ' + e.message;
   }
+}
+
+// ── Ajustes de cashback ───────────────────────────────────────────────────────
+
+async function salvarAjustePct(siteId, parceiro, tipo, valorDigitado, valorOriginal) {
+  const pct = parseFloat(valorDigitado);
+  // Campo limpo → remover ajuste
+  if (valorDigitado === '' || isNaN(pct)) {
+    await removerAjuste(siteId, parceiro, tipo);
+    return;
+  }
+  // Guarda como fator multiplicador: valor real desejado ÷ valor original
+  const fator = (valorOriginal && valorOriginal !== 0) ? pct / valorOriginal : 1.0;
+  ajusteMap[`${siteId}|${parceiro}|${tipo}`] = fator;
+  try {
+    await fetch(`${API}/sites/${siteId}/ajustes`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parceiro, tipo, fator }),
+    });
+  } catch (e) { console.error('Erro ao salvar ajuste:', e); }
+  // Atualizar summary sem recarregar tudo
+  const filtrado = todosParceiros.filter(p => {
+    const siteId_ = document.getElementById('filtro-site').value;
+    const cat     = document.getElementById('filtro-categoria').value;
+    const tip     = document.getElementById('filtro-tipo').value;
+    const acesso  = document.getElementById('filtro-acesso').checked;
+    if (siteId_ && String(p.site_id) !== siteId_) return false;
+    if (cat && p.site_categoria !== cat) return false;
+    if (tip && p.tipo !== tip) return false;
+    if (acesso && !acessoMap[p.parceiro]) return false;
+    return true;
+  });
+  atualizarSummary(filtrado);
+}
+
+async function removerAjuste(siteId, parceiro, tipo) {
+  const chave = `${siteId}|${parceiro}|${tipo}`;
+  delete ajusteMap[chave];
+  try {
+    const params = new URLSearchParams({ parceiro, tipo });
+    await fetch(`${API}/sites/${siteId}/ajustes?${params}`, { method: 'DELETE' });
+  } catch (e) { console.error('Erro ao remover ajuste:', e); }
 }
 
 // ── Limiares ──────────────────────────────────────────────────────────────────
