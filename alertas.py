@@ -2,7 +2,7 @@ import logging
 import threading
 from datetime import datetime, timezone
 
-from database import obter_sites_ativos, obter_parceiros_site
+from database import obter_sites_ativos, obter_parceiros_site, obter_configuracao
 from notificador import (
     carregar_config_notif,
     enviar_telegram,
@@ -30,6 +30,7 @@ def _executar_verificacao():
     if not telegram_ativo and not email_ativo:
         return
 
+    preferencias = obter_configuracao("preferencias") or {}
     sites  = obter_sites_ativos()
     alertas = []
 
@@ -38,6 +39,9 @@ def _executar_verificacao():
         for tipo in ("cashback", "pontos_milhas"):
             for p in parceiros.get(tipo, []):
                 if p["status"] != "ativo" or p["ultimo_valor"] is None:
+                    continue
+                # Só alertar parceiros que o usuário marcou como "tenho acesso"
+                if not preferencias.get(p["parceiro"], False):
                     continue
                 for lim in limiares:
                     if lim.get("tipo") != tipo:

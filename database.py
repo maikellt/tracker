@@ -277,7 +277,7 @@ def _rows(sql, params=()):
 
 
 def obter_sites_ativos():
-    return _rows("SELECT id, url, nome FROM sites WHERE ativo = 1")
+    return _rows("SELECT id, url, nome, categoria FROM sites WHERE ativo = 1")
 
 
 def obter_todos_sites():
