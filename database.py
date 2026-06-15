@@ -35,9 +35,28 @@ _sync_lock    = threading.Lock()
 # ── Conexões ──────────────────────────────────────────────────────────────────
 
 def _turso():
+    """Retorna conexão Turso, reconectando se o stream expirou.
+
+    O Turso fecha streams inativos após algumas horas. A conexão Python
+    permanece em memória mas retorna 404 na próxima chamada. Detectamos
+    isso tentando uma query leve e recriando a conexão se houver falha.
+    """
     global _turso_conn
-    if _turso_conn is None and TURSO_URL and TURSO_TOKEN:
+    if not TURSO_URL or not TURSO_TOKEN:
+        return None
+    if _turso_conn is None:
         _turso_conn = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+        return _turso_conn
+    # Testar se o stream ainda está vivo; reconectar se necessário
+    try:
+        _turso_conn.execute("SELECT 1")
+    except Exception as e:
+        logger.warning(f"[TURSO] Stream expirado ({e}) — reconectando...")
+        try:
+            _turso_conn = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+        except Exception as e2:
+            logger.error(f"[TURSO] Falha ao reconectar: {e2}")
+            _turso_conn = None
     return _turso_conn
 
 
@@ -557,10 +576,11 @@ def remover_ajuste(site_id: int, parceiro: str, tipo: str):
 
 
 def verificar_alerta_sem_dados(site_id: int) -> bool:
+    # Janela de 3 dias para absorver fins de semana e inatividade do Render
     row = _row(
         """SELECT COUNT(*) as total FROM snapshots
            WHERE site_id=? AND percentual IS NOT NULL
-             AND capturado_em >= datetime('now', '-2 days')""",
+             AND capturado_em >= datetime('now', '-3 days')""",
         (site_id,),
     )
     return (row["total"] if row else 0) == 0
