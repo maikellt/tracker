@@ -33,13 +33,63 @@ def _log(mensagem: str):
 
 
 def _executar_sync_turso():
-    """Job 3 — sincronização periódica Turso → SQLite local."""
-    from database import _sincronizar_do_turso, _sincronizar_configuracoes_do_turso
+    """Job 3 — sincronização periódica Turso → SQLite local.
+
+    Cria conexão Turso local e descartável a cada execução — evita o problema
+    de stream expirado que ocorre quando a conexão global fica inativa por horas.
+    """
+    import os
+    import libsql_experimental as libsql
+    from database import TURSO_URL, TURSO_TOKEN, _local_write, _rows, LOCAL_DB
+    import sqlite3
+
     _log("Sincronização periódica Turso → local iniciada")
+
+    if not TURSO_URL or not TURSO_TOKEN:
+        _log("Turso não configurado — sync ignorada")
+        return
+
     try:
-        _sincronizar_do_turso()
-        _sincronizar_configuracoes_do_turso()
-        _log("Sincronização periódica concluída")
+        # Conexão fresh a cada execução — sem reuso de stream antigo
+        conn_turso = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+
+        def rows_turso(sql, params=()):
+            cur = conn_turso.execute(sql, params)
+            if not cur.description:
+                return []
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+        def local_write(sql, params=()):
+            conn_local = sqlite3.connect(LOCAL_DB)
+            conn_local.execute(sql, params)
+            conn_local.commit()
+            conn_local.close()
+
+        # Snapshots — apenas os últimos 7 dias para não sobrecarregar
+        rows = rows_turso(
+            "SELECT id, site_id, parceiro, tipo, percentual, unidade, capturado_em "
+            "FROM snapshots WHERE capturado_em >= datetime('now', '-7 days') ORDER BY id"
+        )
+        for r in rows:
+            local_write(
+                "INSERT OR REPLACE INTO snapshots "
+                "(id, site_id, parceiro, tipo, percentual, unidade, capturado_em) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (r["id"], r["site_id"], r["parceiro"], r["tipo"],
+                 r["percentual"], r["unidade"], r["capturado_em"]),
+            )
+
+        # Configurações
+        cfg_rows = rows_turso("SELECT chave, valor FROM configuracoes")
+        for r in cfg_rows:
+            local_write(
+                "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES (?,?)",
+                (r["chave"], r["valor"]),
+            )
+
+        _log(f"Sincronização periódica concluída — {len(rows)} snapshot(s), {len(cfg_rows)} config(s)")
+
     except Exception as e:
         _log("Erro na sincronização periódica: {}".format(e))
 

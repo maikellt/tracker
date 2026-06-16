@@ -361,7 +361,7 @@ def salvar_snapshot(site_id: int, parceiro: str, tipo: str, percentual, unidade)
     row = _row("SELECT capturado_em FROM snapshots WHERE id=?", (snap_id,))
     cap = row["capturado_em"] if row else None
     _turso_write_async(
-        "INSERT INTO snapshots (id, site_id, parceiro, tipo, percentual, unidade, capturado_em) "
+        "INSERT OR IGNORE INTO snapshots (id, site_id, parceiro, tipo, percentual, unidade, capturado_em) "
         "VALUES (?,?,?,?,?,?,?)",
         (snap_id, site_id, parceiro, tipo, percentual, unidade, cap),
     )
