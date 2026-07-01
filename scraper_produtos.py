@@ -140,11 +140,18 @@ async def _coletar_async(url: str, nome: str) -> float | None:
                     'Chrome/124.0.0.0 Safari/537.36'
                 ),
                 locale='pt-BR',
+                extra_http_headers={'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7'},
+            )
+            # Remove o sinalizador que denuncia automação (navigator.webdriver) —
+            # sites com Akamai Bot Manager (ex: Araujo) bloqueiam requests que
+            # expõem esse flag, servindo página reduzida sem JSON-LD
+            await ctx.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
             )
             page = await ctx.new_page()
             await page.route('**/*', _handle_route)
-            await page.goto(url, wait_until='domcontentloaded', timeout=45000)
-            await page.wait_for_timeout(3000)   # JS renderiza preços
+            resposta = await page.goto(url, wait_until='domcontentloaded', timeout=45000)
+            await page.wait_for_timeout(5000)   # JS renderiza preços
 
             preco = await _extrair_json_ld(page)
             if preco:
@@ -152,7 +159,16 @@ async def _coletar_async(url: str, nome: str) -> float | None:
             preco = await _extrair_meta(page)
             if preco:
                 return preco
-            return await _extrair_css(page)
+            preco = await _extrair_css(page)
+            if preco:
+                return preco
+
+            # Diagnóstico — ajuda a distinguir bloqueio de bot vs estrutura não suportada
+            status = resposta.status if resposta else None
+            titulo = await page.title()
+            qtd_ld_json = len(await page.query_selector_all('script[type="application/ld+json"]'))
+            _log(nome, 'DIAGNOSTICO', f'HTTP {status} | titulo="{titulo}" | scripts ld+json={qtd_ld_json}')
+            return None
         finally:
             await browser.close()
 
